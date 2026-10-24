@@ -1,0 +1,11 @@
+__pycache__/
+*.pyc
+# Host data is never part of a release or repository.
+config/*
+!config/*.example.json
+!config/*.example.conf
+backups/
+logs/
+transactions/
+*.local.json
+*.credentials

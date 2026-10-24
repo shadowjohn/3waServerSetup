@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "blacklist_set": "threewa_ban4",
+  "ssh_rescue": {
+    "port": 22,
+    "sources": ["192.0.2.10/32"]
+  },
+  "rules": [
+    {"enabled": false, "protocol": "tcp", "ports": [80, 443], "sources": ["public"]},
+    {"enabled": false, "protocol": "tcp", "ports": [22], "sources": ["192.0.2.10/32"]},
+    {"enabled": false, "protocol": "tcp", "ports": [21], "sources": ["198.51.100.0/24"]},
+    {"enabled": false, "protocol": "tcp", "ports": ["60000-60100"], "sources": ["198.51.100.0/24"]},
+    {"enabled": false, "protocol": "tcp", "ports": [445], "sources": ["198.51.100.0/24"]},
+    {"enabled": false, "protocol": "tcp", "ports": [3306], "sources": ["192.0.2.10/32"]}
+  ]
+}
