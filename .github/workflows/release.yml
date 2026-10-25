@@ -3,22 +3,55 @@ name: Release
 on:
   push:
     tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Existing immutable release tag to publish or resume
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-${{ inputs.release_tag || github.ref_name }}
   cancel-in-progress: false
 
 jobs:
+  source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      tag: ${{ steps.source.outputs.tag }}
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - name: Checkout source resolver
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Resolve immutable tag on main
+        id: source
+        env:
+          RELEASE_TAG: ${{ inputs.release_tag || github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -c 'import os; from scripts.build_release import release_version; release_version(os.environ["RELEASE_TAG"])'
+          commit=$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse --verify "refs/tags/$RELEASE_TAG^{commit}")
+          git -c safe.directory="$GITHUB_WORKSPACE" merge-base --is-ancestor "$commit" origin/main
+          printf 'tag=%s\ncommit=%s\n' "$RELEASE_TAG" "$commit" >> "$GITHUB_OUTPUT"
+
   verify:
+    needs: source
     uses: ./.github/workflows/ci.yml
+    with:
+      ref: ${{ needs.source.outputs.commit }}
     permissions:
       contents: read
 
   build:
-    needs: verify
+    needs: [source, verify]
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     container: ubuntu:26.04
@@ -32,16 +65,19 @@ jobs:
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.source.outputs.commit }}
           persist-credentials: false
           fetch-depth: 0
       - name: Verify tag belongs to main
+        env:
+          RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
         run: |
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
-          git merge-base --is-ancestor HEAD origin/main
+          test "$(git -c safe.directory="$GITHUB_WORKSPACE" rev-parse HEAD)" = "$RELEASE_COMMIT"
+          git -c safe.directory="$GITHUB_WORKSPACE" merge-base --is-ancestor HEAD origin/main
       - name: Download exact runtime wheels and build verified payload
         env:
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.source.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
         run: |
           python3 -m venv /tmp/threewa-build-venv
           /tmp/threewa-build-venv/bin/python -m pip --isolated download --require-hashes --only-binary=:all: --no-deps -r requirements-tui.lock --dest /tmp/threewa-wheelhouse
@@ -56,7 +92,7 @@ jobs:
           retention-days: 7
 
   publish:
-    needs: build
+    needs: [source, build]
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:
@@ -65,6 +101,7 @@ jobs:
       - name: Checkout publisher identity
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ needs.source.outputs.commit }}
           persist-credentials: false
           fetch-depth: 0
       - name: Retrieve the exact tested build
@@ -91,11 +128,13 @@ jobs:
       - name: Publish complete signed Release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ github.ref_name }}
-          RELEASE_COMMIT: ${{ github.sha }}
+          RELEASE_TAG: ${{ needs.source.outputs.tag }}
+          RELEASE_COMMIT: ${{ needs.source.outputs.commit }}
         shell: bash
         run: |
           set -euo pipefail
+          remote_commit=$(gh api "repos/$GITHUB_REPOSITORY/commits/$RELEASE_TAG" --jq .sha)
+          test "$remote_commit" = "$RELEASE_COMMIT"
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo 'A release with this tag already exists; assets are never overwritten.' >&2
             exit 1
