@@ -9,7 +9,7 @@
 | 功能 | FTP 完整架站 | 目前設定與 daemon 驗證；尚未建立帳號／chroot／TLS、驗證 PASV 實際傳檔 |
 | 功能 | Samba 分享與帳號 | 目前全域設定與 testparm；尚未配置分享／密碼及 Windows 實際讀寫 |
 | 功能 | 網站與 GIS 服務 | Apache 敏感檔案規則仍是候選；vhost／HTTPS、MapServer CGI／mapfile、XSendfile 路徑政策尚未由套件頁自動配置 |
-| 維運 | 版本發行與 updater | 仍為設計；尚無正式 tag／release／自更新切換 |
+| 維運 | Release 後續維護 | CI、簽章發行包、安裝器、明確更新與程式回退見[安裝操作](installation.md)；自動排程更新、簽章 key 輪替及舊版清理尚未提供 |
 | 維運 | 備份與記錄保留 | 尚無交易備份／編譯產物／日誌的保留天數與容量清理介面 |
 | 驗收 | Hyper-V 匯入還原開機 | 完整匯出與 SHA256 已核對；尚未真的匯入並開機驗證。`.26` 的 Startup 已於 2026-10-25 完成實際 VM reboot／開機執行／新 SSH 連線與測後還原驗證 |
 | 驗收 | 其他平台與壓力 | Ubuntu 22.04／24.04、多 PHP／pool、XFS／Btrfs、Swap 記憶體壓力未驗收 |

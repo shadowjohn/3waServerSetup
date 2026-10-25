@@ -1,16 +1,16 @@
 # 版本與自更新設計
 
-狀態：僅設計，尚未實作updater、建立tag或宣告正式版本。Repo名稱3waServerSetup，安裝名稱／根目錄3waServerSetting／/opt/3waServerSetting，主入口run.sh不變。
+2026-10-25 使用者已核准 CI、Release、首次安裝、明確更新與程式回退，本輪依 [Release 安裝與更新規格](release-distribution.md) 實作。Repo 名稱 `3waServerSetup`，安裝名稱／根目錄 `3waServerSetting`／`/opt/3waServerSetting`，主入口 `run.sh` 不變。下方保留設計原則，實際版本與驗收以發行說明及操作文件為準。
 
 範圍更新：第一版已明確排除VPN／PPP／NAT管理，不再等待其遷移決策；下文保留私人舊nat資料的要求仍適用，更新程式不可覆蓋或自動遷移原整機規則。
 
 ## 版本與來源
 
-採SemVer vMAJOR.MINOR.PATCH tag發版：不相容操作／配置契約升major、新增相容功能升minor、修正升patch；預發版加-rc.N。release manifest記錄版本、完整commit、設定schema相容範圍、Python／依賴鎖定資訊、檔案清單及hash、實際驗證平台與測試摘要。UI固定顯示安裝版本／完整commit可展開、dirty狀態及「已驗證／未驗證平台」；不得把支援目標22.04／24.04／26.04寫成已通過。當前只有Windows離線／CLI檢查，Ubuntu與FPM尚未驗證。
+依使用者指定採日期版號 `YYYY.MM.DD.NNN`，tag 如 `v2026.10.25.001`；日期有效、三位流水號由001起，同日依序002／003，預發版可加-rc.N。版本比較依日期、流水號與rc階段，不依字串排序；資料不相容性另外由manifest的data_schema與相容性檢查管理。release manifest記錄版本、完整commit、設定schema相容範圍、Python／依賴鎖定資訊、檔案清單及hash、實際驗證平台與測試摘要。UI顯示安裝版本、commit 與來源；不得把支援目標22.04／24.04／26.04寫成已通過。Ubuntu 26.04 的服務、Feather CLI／FPM 及真重開已完成驗證，見[原生紀錄](ubuntu26-root-validation.md)；24.04 的安裝／更新與服務管理需分別實測標記。
 
 固定來源git@github.com:shadowjohn/3waServerSetup.git；可選相同repo的公開HTTPS來源https://github.com/shadowjohn/3waServerSetup作不需私鑰的分發，不接受UI任意URL或不明鏡像。保留既有SSH信任與金鑰；認證／host key失敗即停止，不自動接受新信任或建立金鑰。HTTPS亦需有效TLS驗證。tag名稱可能被移動，選版時須固定完整commit並在下載後再次比對，不能只憑tag文字認定內容未變。
 
-來源身分與完整性分別驗證：HTTPS/SSH傳輸不等於發行者簽章。正式更新應使用已核准的簽名tag／release manifest與本機固定信任指紋，驗證簽名、manifest的commit及檔案hash；hash若來自同一未驗證來源僅證明傳輸一致，不能當發行者認證。發行簽名與信任指紋尚待確立，未完成前只能顯示「來源未充分驗證」，不提供root自動切換。不得在本輪生成／匯入金鑰、改憑證或自行豁免驗證。
+來源身分與完整性分別驗證：HTTPS/SSH傳輸不等於發行者簽章。正式更新使用專用 Ed25519 key 簽署 release manifest，主機固定 `release/allowed_signers` 的信任公鑰，驗證簽名、manifest 的 commit 及檔案 hash。OpenSSH signer identity 為 `3waServerSetup-release`、namespace 為 `3wa-release@3wa.tw`，公鑰指紋 `SHA256:/5IXRjCkghh4QFZGv27zsQA5MWTtvKJUUDPr/YX4toM`；私鑰不進 Git、安裝包或主機。hash 只證明完整性，不能替代簽章；首次執行下載的安裝器由操作者確認來源，後續更新不得靜默更換信任公鑰。
 
 ## 操作流程與目錄
 
@@ -36,4 +36,4 @@ validate包含manifest與來源驗證、Python與鎖定依賴相容、非特權�
 
 Ubuntu26.04→24.04→22.04逐台測：正常升版／選舊版、離線保留舊版、tag移動／簽章錯／hash錯、下載中斷、滿磁碟、惡意路徑／symlink、dirty checkout、原私有nat與config保持不變、依賴ABI不符、進行中交易阻擋、validate／啟動失敗回指、切換前後斷電、schema不相容、回退不誤稱回復主機。HEAD版本顯示與實際執行revision一致，未測平台必須明示。
 
-待確立：第一個正式版本號、發行簽章與信任指紋的受控建立流程、release artifact／依賴的離線分發方式。未決不妨礙設計審閱，但禁止宣稱已有安全自更新。此文件未觸發任何遠端查詢、fetch、安裝或執行。
+本輪第一版採 `v2026.10.25.001`，鎖定的 universal wheels 隨包分發，簽章 key 與更新操作契約見 [Release 規格](release-distribution.md)。發版、主機實測與其他平台的實際完成範圍依驗收記錄標示；文件本身不觸發更新、安裝或系統設定變更。

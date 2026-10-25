@@ -6,11 +6,14 @@
 
 MariaDB 新增獨立的 [root 密碼與外連 On／Off](docs/mariadb-root-access.md)，依使用者選擇支援 root@%。右側圖像改為[使用者提供的 3wa 原圖](docs/previews/3wa-logo-source.png)，以黑白 Braille 點陣呈現，保留既有 20×20 終端尺寸與窄畫面退化。
 
+新主機使用 GitHub Release 的安裝器；開發才 clone。安裝、明確檢查更新與程式回退見[安裝與更新操作](docs/installation.md)。版號採 `YYYY.MM.DD.NNN`，例如 `2026.10.25.001`；發布包附固定公鑰驗證的簽章 manifest、完整檔案 hash 與鎖定 wheels。啟動不自動連網更新，主機設定／備份／編譯模組留在版本目錄外。
+
 - [總設計與8bit看板娘提案](docs/design.md)
 - [防火牆來源與 SSH 回復保護](docs/firewall-root.md)、[Swap 容量／啟停／fstab](docs/swap-root.md)、[根 LV 擴容](docs/root-lvm.md)
 - [APT 套件勾選安裝](docs/apt-install.md)、[羽山版 PDO SQLite 編譯／啟用／還原](docs/php-feather.md)、[手動更新 BanIP](docs/banip-root.md)
 - [Startup 開機腳本：設定／儲存／套用／立即執行／還原](docs/startup-root.md)
 - [尚未完成的功能與驗收](docs/remaining-work.md)
+- [Release 安裝與更新規格](docs/release-distribution.md)
 - [離線防火牆候選](docs/firewall-offline.md)：只支援IPv4 INPUT，無apply；不可直接導入iptables-restore。
 - [PDO SQLite／SQLite3 RTree／SpatiaLite CLI測試](tests/README.md)
 - [Apache敏感檔案候選](docs/apache-sensitive-files.md)：合成匹配測試已跑，Apache runtime尚未驗證。

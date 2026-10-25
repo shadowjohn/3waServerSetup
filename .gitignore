@@ -13,3 +13,4 @@ transactions/
 validation-results/
 
 .root-dev/
+dist/

@@ -1,6 +1,7 @@
 """Local console: nonroot observation, explicit reviewed root transactions."""
 import asyncio
 import json
+import re
 import time
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -8,7 +9,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, Select, Static, Switch, TabbedContent, TabPane, Tabs, TextArea
-from . import VERSION, revision
+from . import VERSION, revision, version_info, update_management_available, release_public, valid_release_tag
 from .model import ROOT, FIELDS, LABELS, preview, firewall_preview, apache_candidate
 from .probes import collect, root_management_available
 from .diagnostics import sqlite_smoke
@@ -80,7 +81,7 @@ class SettingApp(App):
     #packages-list Checkbox { width: 1fr; height: auto; min-height: 1; }
     """
 
-    def __init__(self, ascii_mode=False, plain=False, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None):
+    def __init__(self, ascii_mode=False, plain=False, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None):
         super().__init__()
         self.root_manager = root_manager
         self.root_unavailable = ''
@@ -91,6 +92,16 @@ class SettingApp(App):
             except Exception as error:
                 self.root_unavailable = str(error)
         self.root_mode = self.root_manager is not None
+        self.update_root = update_management_available()
+        self.release_manager = release_manager
+        self.release_state = {'supported':False, 'managed':False, 'pending':None,
+                              'detail':'Local release status has not been read.'}
+        if self.release_manager is None:
+            try:
+                from .release_update import ReleaseManager
+                self.release_manager = ReleaseManager()
+            except Exception:
+                self.release_state['detail'] = 'Release backend is unavailable.'
         self.firewall_manager = firewall_manager
         self.firewall_state = {}
         self._fw_status_at = time.monotonic()
@@ -163,8 +174,9 @@ class SettingApp(App):
         self._root_task = None
         self._mariadb_password = None
         self.mariadb_security = {}
-        mode = 'ROOT MANAGEMENT' if self.root_mode else 'READ ONLY'
-        self.sub_title = f'{VERSION} / base {revision()} / local development | {mode}'
+        mode = 'ROOT MANAGEMENT' if self.root_mode else ('SERVICE READ ONLY / PROGRAM UPDATES' if self.update_root else 'READ ONLY')
+        identity = version_info()
+        self.sub_title = f'{identity["version"]} / commit {identity["commit"][:12]} / {identity["channel"]} | {mode}'
         self.ascii_mode = ascii_fallback(ascii_mode)
         self.plain = plain
         self.snapshot = {'modules': {}}
@@ -175,6 +187,7 @@ class SettingApp(App):
         yield Header()
         mode = ('ROOT / Ubuntu 26.04: review and confirm one selected-page operation. '
                 'Firewall needs a new SSH confirmation. Root LV growth is irreversible; OS accounts: view only.' if self.root_mode else
+                'Service settings are READ ONLY on this platform. Software update switches require a separate review.' if self.update_root else
                 'READ ONLY: drafts and previews stay in memory. No system apply / installs / SSH.')
         if self.root_unavailable:
             mode += ' Management unavailable: ' + self.root_unavailable
@@ -388,6 +401,19 @@ class SettingApp(App):
                                     yield Button('Download & run once', id='banip-update', variant='warning')
                                     yield Button('Read BanIP status', id='banip-status')
                                 yield TextArea('', read_only=True, id='out-banip', classes='output')
+                    with TabPane('Software update', id='tab-update'):
+                        with VerticalScroll():
+                            yield Static('Reading local release identity...', id='update-state', classes='module-state', markup=False)
+                            yield Static('Program versions only. Check contacts the fixed GitHub release source; ordinary startup stays local. Apply and rollback preserve host settings, backups and modules. A successful switch closes this console; reopen run.sh to use the selected version.', classes='hint', markup=False)
+                            yield Input('', placeholder='Optional tag, e.g. v2026.10.25.001; blank selects latest stable', max_length=64, id='release-tag')
+                            with Horizontal(classes='buttons'):
+                                yield Button('Check releases', id='update-check')
+                                yield Button('Read local status', id='update-status')
+                            if self.update_root:
+                                with Horizontal(classes='buttons'):
+                                    yield Button('Review & update', id='update-apply', variant='warning', disabled=True)
+                                    yield Button('Rollback / recover', id='update-rollback', disabled=True)
+                            yield TextArea('', read_only=True, id='out-update', classes='output')
                     with TabPane('SQLite', id='tab-sqlite'):
                         with VerticalScroll():
                             yield Static('Explicit local CLI memory-only check. No PHP settings change; no native module path accepted by this UI. SpatiaLite without a module is UNVERIFIED. CLI results never prove FPM health.', classes='hint', markup=False)
@@ -437,6 +463,7 @@ class SettingApp(App):
                 configured = '\n'.join(f'{key}: {value}' for key, value in item['configured'].items()) or 'UNKNOWN'
                 self.query_one(f'#state-{module}', Static).update(f'[{item["status"]}] {item["detail"]}\nObserved selected config:\n{configured}\nEffective runtime: {item["runtime"]}')
         self.query_one('#overview', Static).update('\n\n'.join(lines))
+        await self._refresh_release_status()
         if self.root_mode:
             for module in ROOT_MODULES:
                 try:
@@ -499,6 +526,7 @@ class SettingApp(App):
         self._packages_update_controls()
         self._php_feather_update_controls()
         self._startup_update_controls()
+        self._release_update_controls()
         self.query_one('#banip-update', Button).disabled = self._mutation_pending() or not self.banip_state.get('supported')
         if self._mutation_pending():
             for button in self.query(Button):
@@ -509,7 +537,99 @@ class SettingApp(App):
         return bool(self.firewall_state.get('pending') or self.banip_state.get('pending'))
 
     def _mutation_pending(self):
-        return self._network_pending() or bool(self.startup_state.get('pending'))
+        return self._network_pending() or bool(self.startup_state.get('pending') or self.release_state.get('pending'))
+
+    async def _refresh_release_status(self):
+        try:
+            if self.release_manager is not None:
+                self.release_state = await asyncio.to_thread(self.release_manager.status)
+        except Exception:
+            self.release_state = {'supported':False, 'managed':False, 'pending':self.release_state.get('pending'),
+                                  'detail':'Local release state cannot be verified; program switching is disabled.'}
+        self.query_one('#update-state', Static).update(json.dumps(release_public(self.release_state), ensure_ascii=True, default=str))
+        if not self.root_busy:
+            self._release_update_controls()
+
+    def _release_update_controls(self):
+        self.query_one('#update-check', Button).disabled = self.root_busy or self.release_manager is None
+        self.query_one('#update-status', Button).disabled = self.root_busy
+        if not self.update_root:
+            return
+        ready = bool(self.update_root and self.release_manager is not None and self.release_state.get('supported')
+                     and self.release_state.get('managed'))
+        foreign = self._network_pending() or bool(self.startup_state.get('pending'))
+        own_pending = self.release_state.get('pending')
+        self.query_one('#update-apply', Button).disabled = self.root_busy or not ready or foreign or bool(own_pending)
+        recoverable = bool(isinstance(own_pending, dict) and own_pending.get('recoverable'))
+        self.query_one('#update-rollback', Button).disabled = self.root_busy or not ready or foreign or not (
+            recoverable if own_pending else self.release_state.get('previous'))
+
+    def _begin_release_operation(self, operation):
+        if self.root_busy or self.release_manager is None or operation not in {'status', 'check', 'apply', 'rollback'}:
+            return
+        if operation in {'apply', 'rollback'}:
+            if not self.update_root:
+                self._root_result('update', {'status':'DENIED', 'code':'ROOT_REQUIRED', 'message':'Program switching requires root on Ubuntu 24.04 or 26.04.'})
+                return
+            if self._network_pending() or self.startup_state.get('pending') or (operation == 'apply' and self.release_state.get('pending')):
+                return
+        tag = self.query_one('#release-tag', Input).value.strip() or None
+        if operation in {'check', 'apply'} and tag is not None and not valid_release_tag(tag):
+            self._root_result('update', {'status':'ERROR', 'code':'INVALID_ARGUMENT', 'message':'Use vYYYY.MM.DD.NNN with a real date and sequence 001..999, optionally followed by -rc.N.'})
+            return
+        self._start_root_busy()
+        self._root_task = asyncio.create_task(self._prepare_release_operation(operation, tag))
+
+    async def _prepare_release_operation(self, operation, tag):
+        try:
+            if operation in {'status', 'check'}:
+                if operation == 'status':
+                    await self._refresh_release_status()
+                    result = self.release_state
+                else:
+                    result = await asyncio.to_thread(self.release_manager.check, tag)
+                self._root_result('update', release_public(result))
+                self._finish_root_operation()
+                return
+            plan = await asyncio.to_thread(self.release_manager.rollback_plan) if operation == 'rollback' else await asyncio.to_thread(self.release_manager.plan, tag)
+            detail = ('Switch program version and its private venv. Host settings and business data remain as they are.\n'
+                      'The console closes after a successful switch; reopen run.sh.\n\n'
+                      + json.dumps(release_public(plan), ensure_ascii=True, indent=2, default=str))
+            self.push_screen(RootReview('Software update / '+operation+': review program version switch', detail),
+                             lambda confirmed: self._release_review_completed(confirmed, operation, plan))
+        except Exception as error:
+            self._release_error(error)
+            self._finish_root_operation()
+
+    def _release_error(self, error):
+        code = getattr(error, 'code', 'UPDATE_FAILED')
+        if not isinstance(code, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', code):
+            code = 'UPDATE_FAILED'
+        self._root_result('update', {'status':'FAILED', 'code':code,
+                                    'message':'Program switch failed. Inspect local update status; staging details are not shown here.'})
+
+    def _release_review_completed(self, confirmed, operation, plan):
+        if not confirmed:
+            self._root_result('update', {'status':'CANCELLED', 'message':'No program version was switched.'})
+            self._finish_root_operation()
+            return
+        self._root_task = asyncio.create_task(self._execute_release_operation(operation, plan))
+
+    async def _execute_release_operation(self, operation, plan):
+        result = None
+        try:
+            method = self.release_manager.rollback if operation == 'rollback' else self.release_manager.apply
+            result = await asyncio.to_thread(method, plan)
+            self._root_result('update', release_public(result))
+            await self._refresh_release_status()
+        except Exception as error:
+            self._release_error(error)
+            await self._refresh_release_status()
+        finally:
+            self._finish_root_operation()
+        if result and result.get('status') in {'UPDATED', 'UPDATE_ROLLED_BACK'}:
+            self.exit(release_public(dict(result, restart_required=True)),
+                      message='Program version switched. Reopen /opt/3waServerSetting/run.sh to continue.')
 
     def _selected_package_names(self):
         names = set()
@@ -1108,11 +1228,16 @@ class SettingApp(App):
             widget.disabled = disabled
         self._busy_widgets = []
         self.root_busy = False
-        self._update_root_buttons()
+        if self.root_mode:
+            self._update_root_buttons()
+        else:
+            self._release_update_controls()
 
     def _root_result(self, module, value):
         if module == 'startup':
             value = self._startup_public(value)
+        elif module == 'update':
+            value = release_public(value)
         selector = '#fw-output' if module == 'firewall' else f'#out-{module}'
         self.query_one(selector, TextArea).load_text(json.dumps(value, ensure_ascii=True, indent=2, default=str))
 
@@ -1403,6 +1528,9 @@ class SettingApp(App):
     async def on_button_pressed(self, event: Button.Pressed):
         action = event.button.id or ''
         if self.root_busy:
+            return
+        if action.startswith('update-'):
+            self._begin_release_operation(action[len('update-'):])
             return
         if self.root_mode and action.startswith('startup-'):
             self._begin_startup_operation(action[len('startup-'):])

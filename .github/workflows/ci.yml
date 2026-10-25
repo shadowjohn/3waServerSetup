@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Ubuntu ${{ matrix.ubuntu }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        ubuntu: ['24.04', '26.04']
+    container: ubuntu:${{ matrix.ubuntu }}
+    steps:
+      - name: Prepare isolated test environment
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends python3 python3-venv git openssh-client ca-certificates
+      - name: Checkout exact source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install hash-locked test dependencies
+        run: |
+          python3 -m venv /tmp/threewa-test-venv
+          /tmp/threewa-test-venv/bin/python -m pip --isolated install --require-hashes --only-binary=:all: --no-deps -r requirements-tui.lock
+          /tmp/threewa-test-venv/bin/python -m pip check
+      - name: Run complete isolated test suite
+        run: /tmp/threewa-test-venv/bin/python -m unittest discover -s tests -v
+      - name: Headless startup, keyboard and resize
+        run: /tmp/threewa-test-venv/bin/python -m server_setting --smoke

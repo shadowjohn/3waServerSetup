@@ -309,6 +309,25 @@ class RootActionsTests(unittest.TestCase):
                     self.fail('must not acquire unsupported lock')
         self.assertFalse((self.root / 'run').exists())
 
+    @unittest.skipUnless(os.name=='posix','The acquisition race uses native flock and symlinks')
+    def test_release_gate_is_rechecked_inside_the_acquired_root_lock(self):
+        from server_setting import root_actions
+        installation=self.root/'installation';old=installation/'releases/old';new=installation/'releases/new'
+        old.mkdir(parents=True);new.mkdir()
+        pointer=installation/'current';pointer.symlink_to('releases/old',target_is_directory=True)
+        manager=RootManager(self.host)
+        original=root_actions._fcntl.flock
+        def acquire_then_update(descriptor, flags):
+            original(descriptor, flags)
+            changed=installation/'next';changed.symlink_to('releases/new',target_is_directory=True)
+            os.replace(changed,pointer)
+        with patch.object(root_actions,'_RUNNING_CODE_ROOT',old):
+            manager._gate('apache')  # Valid before the updater switches current.
+            with patch.object(root_actions._fcntl,'flock',side_effect=acquire_then_update):
+                with self.assertRaises(RootActionError) as error:
+                    with manager._lock():self.fail('Stale code acquired permission to mutate')
+            self.assertEqual(error.exception.code,'UPDATE_RESTART_REQUIRED')
+
     def test_install_only_explicit_packages_never_full_upgrade(self):
         plan = self.manager.install_plan('apache')
         self.assertEqual(plan['packages'], ['apache2'])

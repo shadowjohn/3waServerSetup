@@ -1,0 +1,111 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/ci.yml
+    permissions:
+      contents: read
+
+  build:
+    needs: verify
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    container: ubuntu:26.04
+    steps:
+      - name: Prepare release builder
+        env:
+          DEBIAN_FRONTEND: noninteractive
+        run: |
+          apt-get update
+          apt-get install --yes --no-install-recommends python3 python3-venv git ca-certificates
+      - name: Checkout release tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Verify tag belongs to main
+        run: |
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          git merge-base --is-ancestor HEAD origin/main
+      - name: Download exact runtime wheels and build verified payload
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: |
+          python3 -m venv /tmp/threewa-build-venv
+          /tmp/threewa-build-venv/bin/python -m pip --isolated download --require-hashes --only-binary=:all: --no-deps -r requirements-tui.lock --dest /tmp/threewa-wheelhouse
+          /tmp/threewa-build-venv/bin/python scripts/build_release.py --version "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --wheelhouse /tmp/threewa-wheelhouse --output dist --validated-platform ubuntu26.04
+          sh -n dist/install.sh
+      - name: Preserve unsigned build inputs for the signing job
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-inputs
+          path: dist/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout publisher identity
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Retrieve the exact tested build
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-inputs
+          path: dist
+      - name: Sign manifest with the dedicated publisher key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$RELEASE_SIGNING_KEY"
+          key="$RUNNER_TEMP/threewa-release-signing-key"
+          trap 'rm -f -- "$key"' EXIT
+          umask 077
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$key"
+          ssh-keygen -Y sign -f "$key" -n 3wa-release@3wa.tw dist/release-manifest.json
+          ssh-keygen -Y verify -f release/allowed_signers -I 3waServerSetup-release -n 3wa-release@3wa.tw -s dist/release-manifest.json.sig < dist/release-manifest.json
+          cd dist
+          sha256sum -c SHA256SUMS
+          sha256sum release-manifest.json.sig >> SHA256SUMS
+      - name: Publish complete signed Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+          RELEASE_COMMIT: ${{ github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo 'A release with this tag already exists; assets are never overwritten.' >&2
+            exit 1
+          fi
+          printf '%s\n' "3waServerSetting $RELEASE_TAG" '' "Commit: $RELEASE_COMMIT" '' \
+            'Ubuntu 26.04 installation and management were validated on the project VM. Ubuntu 24.04 CI tests do not claim native service validation.' '' \
+            'Download install.sh, review it, then run: sudo sh install.sh --release '"$RELEASE_TAG" '' \
+            'The installer authenticates the pinned SSH release signature, verifies all payload hashes, and preserves host configuration and backups.' '' \
+            'Updates and rollback change program versions only. Existing service settings, databases and disks are not reverted.' > "$RUNNER_TEMP/threewa-release-notes.md"
+          flags=(--latest)
+          if [[ "$RELEASE_TAG" == *-rc.* ]]; then flags=(--prerelease --latest=false); fi
+          gh release create "$RELEASE_TAG" dist/* --repo "$GITHUB_REPOSITORY" --verify-tag --draft --title "3waServerSetting $RELEASE_TAG" --notes-file "$RUNNER_TEMP/threewa-release-notes.md" "${flags[@]}"
+          gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false "${flags[@]}"

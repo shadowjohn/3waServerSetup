@@ -1,0 +1,91 @@
+#!/bin/sh
+# Install a signed 3waServerSetting Release; no Git or GitHub login is required.
+set -eu
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+unset APT_CONFIG BASH_ENV ENV LD_PRELOAD LD_LIBRARY_PATH PYTHONPATH PYTHONHOME PIP_CONFIG_FILE 2>/dev/null || true
+umask 077
+release=
+prefix=/opt/3waServerSetting
+from_dir=
+while [ "$#" -gt 0 ]; do
+    case "$1" in
+        --release|--prefix|--from-dir)
+            option=$1
+            [ "$#" -ge 2 ] || { printf '%s\n' 'An option value is missing.' >&2; exit 2; }
+            case "$option" in --release) release=$2;; --prefix) prefix=$2;; --from-dir) from_dir=$2;; esac
+            shift 2;;
+        --help|-h)
+            printf '%s\n' 'Usage: sh install.sh [--release v2026.10.25.001] [--prefix /opt/3waServerSetting] [--from-dir /absolute/signed-assets]'
+            exit 0;;
+        *) printf '%s\n' 'Unknown installer option.' >&2; exit 2;;
+    esac
+done
+[ "$(id -u)" = 0 ] || { printf '%s\n' 'Run this reviewed installer as root.' >&2; exit 1; }
+case "$prefix" in /*) ;; *) printf '%s\n' 'Installation prefix must be absolute.' >&2; exit 2;; esac
+if [ -n "$release" ]; then
+    case "$release" in v[0-9]*.[0-9]*.[0-9]*.[0-9]*) ;; *) printf '%s\n' 'Use a vYYYY.MM.DD.NNN release tag.' >&2; exit 2;; esac
+    case "$release" in *[!a-zA-Z0-9.-]*) printf '%s\n' 'Invalid release tag.' >&2; exit 2;; esac
+fi
+if [ -n "$from_dir" ]; then
+    case "$from_dir" in /*) ;; *) printf '%s\n' 'Offline asset directory must be absolute.' >&2; exit 2;; esac
+fi
+[ -r /etc/os-release ] || { printf '%s\n' 'Ubuntu 24.04 or 26.04 is required.' >&2; exit 1; }
+. /etc/os-release
+[ "${ID:-}" = ubuntu ] && { [ "${VERSION_ID:-}" = 24.04 ] || [ "${VERSION_ID:-}" = 26.04 ]; } || {
+    printf '%s\n' 'This installer supports Ubuntu 24.04 and 26.04 only.' >&2; exit 1;
+}
+missing=
+command -v python3 >/dev/null 2>&1 || missing=1
+command -v ssh-keygen >/dev/null 2>&1 || missing=1
+command -v curl >/dev/null 2>&1 || missing=1
+[ -r /etc/ssl/certs/ca-certificates.crt ] || missing=1
+if [ -z "$missing" ]; then
+    python3 -I -c 'import sys,venv,ensurepip,ssl; assert sys.version_info >= (3,12)' >/dev/null 2>&1 || missing=1
+fi
+if [ -n "$missing" ]; then
+    printf '%s\n' 'Installing bootstrap prerequisites: python3, python3-venv, openssh-client, curl, ca-certificates.'
+    DEBIAN_FRONTEND=noninteractive apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-remove --no-install-recommends \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
+        python3 python3-venv openssh-client curl ca-certificates
+fi
+python3 -I -c 'import sys,venv,ensurepip,ssl; assert sys.version_info >= (3,12)' || exit 1
+[ -d /opt ] || install -d -m 755 /opt
+work=$(mktemp -d /opt/.3wa-bootstrap.XXXXXXXX)
+case "$work" in /opt/.3wa-bootstrap.*) ;; *) printf '%s\n' 'Unexpected bootstrap directory.' >&2; exit 1;; esac
+trap 'rm -rf -- "$work"' EXIT HUP INT TERM
+cat > "$work/allowed_signers" <<'THREEWA_SIGNERS'
+@ALLOWED_SIGNERS@
+THREEWA_SIGNERS
+cat > "$work/bootstrap.py" <<'THREEWA_BOOTSTRAP'
+@BOOTSTRAP_PYTHON@
+THREEWA_BOOTSTRAP
+if [ -z "$release" ]; then
+    base=https://github.com/shadowjohn/3waServerSetup/releases/latest/download
+else
+    base=https://github.com/shadowjohn/3waServerSetup/releases/download/$release
+fi
+fetch_asset() {
+    name=$1
+    if [ -n "$from_dir" ]; then
+        cp -- "$from_dir/$name" "$work/$name"
+    else
+        curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+            --connect-timeout 15 --max-time 180 --retry 2 --retry-delay 2 --output "$work/$name" "$base/$name"
+    fi
+}
+fetch_asset release-manifest.json
+fetch_asset release-manifest.json.sig
+if [ -n "$release" ]; then
+    archive=$(python3 -I "$work/bootstrap.py" manifest --directory "$work" --installer "$0" --signers "$work/allowed_signers" --release "$release")
+else
+    archive=$(python3 -I "$work/bootstrap.py" manifest --directory "$work" --installer "$0" --signers "$work/allowed_signers")
+fi
+fetch_asset "$archive"
+if [ -n "$release" ]; then
+    python3 -I "$work/bootstrap.py" install --directory "$work" --installer "$0" --signers "$work/allowed_signers" --release "$release" --root "$prefix"
+else
+    python3 -I "$work/bootstrap.py" install --directory "$work" --installer "$0" --signers "$work/allowed_signers" --root "$prefix"
+fi
+printf '%s\n' "Installed. Start the tool with: $prefix/run.sh"

@@ -11,7 +11,7 @@ import re
 import stat
 import sys
 import warnings
-from . import VERSION, revision
+from . import VERSION, revision, version_info, update_management_available, release_public, valid_release_tag
 from .probes import collect, root_management_available
 from .model import FIELDS
 
@@ -455,15 +455,51 @@ def startup_command(args, manager=None):
                               'message': 'Startup operation failed; inspect its sanitized status. Script output is not included.'}, 1)
 
 
-def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None):
+def update_command(args, manager=None):
+    operation = next(name for name in ('status', 'check', 'plan', 'apply', 'rollback') if getattr(args, 'update_'+name))
+    if operation in {'apply', 'rollback'}:
+        if not update_management_available():
+            return json_response({'status':'DENIED', 'code':'ROOT_REQUIRED', 'module':'update',
+                                  'message':'Program updates require root on Ubuntu 24.04 or 26.04.'}, 1)
+        if not args.confirm:
+            return json_response({'status':'ERROR', 'code':'CONFIRMATION_REQUIRED', 'module':'update',
+                                  'message':'Review the update plan, then use --confirm for a program switch.'}, 2)
+    try:
+        if manager is None:
+            from .release_update import ReleaseManager
+            manager = ReleaseManager()
+        if operation == 'status':
+            result = manager.status()
+        elif operation == 'check':
+            result = manager.check(args.release_tag)
+        elif operation == 'plan':
+            result = manager.plan(args.release_tag)
+        elif operation == 'apply':
+            result = manager.apply(manager.plan(args.release_tag))
+        else:
+            result = manager.rollback(manager.rollback_plan())
+        return json_response(release_public(result))
+    except Exception as error:
+        code = getattr(error, 'code', 'UPDATE_FAILED')
+        if not isinstance(code, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', code):
+            code = 'UPDATE_FAILED'
+        return json_response({'status':'FAILED', 'code':code, 'module':'update',
+                              'message':'Release operation failed; the previous program is retained unless recovery is required. Inspect local update status.'}, 1)
+
+
+def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None):
     parser = CommandParser(description='3waServerSetting local console and explicit root operations')
-    parser.add_argument('--version', action='version', version=f'{VERSION} / base {revision()} / local development')
+    identity = version_info()
+    parser.add_argument('--version', action='version', version=f'{identity["version"]} / commit {identity["commit"]} / {identity["channel"]}')
     parser.add_argument('--status-json', action='store_true', help='Read local status without Textual')
     parser.add_argument('--text', action='store_true', help='Plain ASCII status fallback, no interactive TUI')
     parser.add_argument('--ascii', action='store_true', help='ASCII labels/mascot (Textual may still draw Unicode borders)')
     parser.add_argument('--plain', action='store_true', help='Plain text fallback for terminals without color/Unicode')
     parser.add_argument('--smoke', action='store_true', help='Headless Textual startup/keyboard/resize check')
     root_modes = parser.add_mutually_exclusive_group()
+    for operation in ('status', 'check', 'plan', 'apply', 'rollback'):
+        root_modes.add_argument('--update-' + operation, action='store_true')
+    parser.add_argument('--release-tag', metavar='TAG', help='Select vYYYY.MM.DD.NNN (001..999; optional -rc.N) for an explicit release check/plan/apply')
     for operation in ('plan', 'apply', 'install', 'restore'):
         root_modes.add_argument('--root-' + operation, metavar='MODULE', choices=ROOT_MODULES)
     root_modes.add_argument('--apt-plan', choices=('update', 'upgrade'))
@@ -529,6 +565,10 @@ def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, 
                                                           for operation in ('search', 'plan', 'install'))
         is_feather_command = any(getattr(args, 'php_feather_' + operation) for operation in ('status', 'plan', 'apply', 'restore'))
         is_startup_command = any(getattr(args, 'startup_' + operation) for operation in ('status', 'load', 'plan', 'save', 'apply', 'run', 'restore'))
+        is_update_command = any(getattr(args, 'update_' + operation) for operation in ('status', 'check', 'plan', 'apply', 'rollback'))
+        if args.release_tag is not None:
+            if not (args.update_check or args.update_plan or args.update_apply) or not valid_release_tag(args.release_tag):
+                raise ValueError('--release-tag requires an explicit update check/plan/apply and a valid release tag')
         if not is_startup_command and args.startup_config is not None:
             raise ValueError('--startup-config requires --startup-plan/save/apply')
         if not is_feather_command and (args.feather_cli is not None or args.feather_fpm is not None):
@@ -541,6 +581,11 @@ def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, 
             raise ValueError('--config requires a firewall plan/save/apply operation')
         if not is_security_command and (args.remote is not None or args.change_root_password or args.password_stdin):
             raise ValueError('MariaDB security options require --mariadb-security-plan/apply')
+        if is_update_command:
+            if (args.status_json or args.text or args.plain or args.smoke or args.values is not None
+                    or args.service_active is not None or args.service_enabled is not None):
+                raise ValueError('Program updates cannot be combined with status/text/smoke or service configuration options')
+            return update_command(args, release_manager)
         if is_root_command or is_apt_command or is_security_command or is_firewall_command or is_lvm_command or is_swap_command or is_banip_command or is_packages_command or is_feather_command or is_startup_command:
             if args.status_json or args.text or args.plain or args.smoke:
                 raise ValueError('Root operations cannot be combined with status/text/smoke modes')

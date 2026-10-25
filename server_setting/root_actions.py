@@ -31,6 +31,7 @@ BACKUPS = '/opt/3waServerSetting/backups'
 RECIPES = '/opt/3waServerSetting/config/recipes'
 LOGS = '/var/lib/3wa-server-setup/logs'
 _POSIX_PERMISSIONS = os.name == 'posix'
+_RUNNING_CODE_ROOT = Path(__file__).resolve().parents[1]
 TRUSTED_PATH = '/usr/sbin:/usr/bin:/sbin:/bin'
 COMMANDS = {'nft', 'iptables', 'ip6tables', 'iptables-save', 'ipset', 'dpkg-query', 'systemctl', 'apache2ctl', 'a2enconf', 'a2disconf',
             'a2enmod', 'testparm', 'mariadbd', 'mariadb', 'timedatectl', 'apt-get'}
@@ -271,6 +272,15 @@ class RootManager:
             raise RootActionError('Root privileges are required.', 'ROOT_REQUIRED')
         if not self._platform():
             raise RootActionError('Writes are supported only on verified Ubuntu 26.04.', 'UNSUPPORTED_OS')
+        self._release_gate()
+
+    @staticmethod
+    def _release_gate():
+        from .release_update import ensure_current_release, ReleaseError
+        try:
+            ensure_current_release(_RUNNING_CODE_ROOT)
+        except ReleaseError as error:
+            raise RootActionError(str(error), error.code) from None
 
     def capabilities(self, module):
         self._module(module)
@@ -395,6 +405,8 @@ class RootManager:
                 _fcntl.flock(descriptor, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
             except OSError:
                 raise RootActionError('Another root transaction is in progress.', 'BUSY') from None
+            # The updater may have switched versions after the earlier gate.
+            self._release_gate()
             yield
         finally:
             os.close(descriptor)
