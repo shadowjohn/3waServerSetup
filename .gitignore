@@ -9,3 +9,7 @@ logs/
 transactions/
 *.local.json
 *.credentials
+.venv/
+validation-results/
+
+.root-dev/

@@ -14,6 +14,8 @@ Ubuntu探測實際mariadbd、systemd unit啟動參數、defaults檔及include順
 
 ## root管理與忘記密碼
 
+後續實作更新：使用者已明確授權本機 root 密碼、root@% 及外連 On／Off，在 Ubuntu 26.04 VM 完成原生驗收。操作與保留條件見 [MariaDB root access](mariadb-root-access.md)；下方救援、密碼檔與其他帳號是分期設計，不代表已實作或附帶授權。
+
 先確認版本及root@localhost的實際驗證方式，嘗試已授權本機socket管理（例如sudo mariadb --protocol=socket）；可管理就不進救援。10.4起可有多個驗證方式，mysql.user是view；不直接UPDATE mysql.user/global_priv，不盲改plugin。需要設密碼時依現有plugin與版本選SET PASSWORD或ALTER USER，先預覽是否保留unix_socket；純socket帳號未必能直接SET PASSWORD，不把切換認證當附帶動作。
 
 只有管理通道都失效、且取得本次特定救援批准，才安排停機窗口、有效備份與本機console；正常停止正確instance，確認退出與datadir／socket／binary版本，不讓兩個server共用資料目錄。臨時skip-grant-tables須同時隔離TCP網路（skip-networking）並限制本機socket存取；此模式本機使用者亦有風險，不持久寫入正常配置。10.4+官方流程在連入後先FLUSH PRIVILEGES再SET PASSWORD，與舊筆記順序不同。不得盲套舊版順序或killall -9；受控正常關閉救援instance、移除臨時override，再由原systemd unit正常啟動。[官方10.4認證與救援](https://mariadb.com/docs/server/security/user-account-management/authentication-from-mariadb-10-4)

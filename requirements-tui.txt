@@ -1,0 +1,3 @@
+# Explicit development/runtime requirement. Launcher never installs it.
+# Windows project-venv validated. Full transitive hashes: requirements-tui.lock.
+textual==8.2.8
