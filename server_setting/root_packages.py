@@ -148,7 +148,7 @@ class PackageManager:
                   group('mapserver', 'MapServer', ['cgi-mapserver', 'mapserver-bin'], 'Package installation only; no vhost, CGI exposure or mapfile is configured by this tool.'),
                   group('python_gis', 'Python GIS', ['python3-gdal', 'python3-pyproj', 'python3-shapely', 'python3-geopandas'], 'Ubuntu system Python bindings; not installed into this tool virtualenv.'),
                   group('gis_headers', 'GIS development headers', ['libproj-dev', 'libgdal-dev', 'libgeos-dev', 'libspatialite-dev'], 'Headers and development libraries; these do not compile custom PHP modules.'),
-                  group('base', 'Base tools', ['ntpsec-ntpdate', 'vim', 'make', 'screen', 'wget'], 'ntpsec-ntpdate is the Ubuntu 26.04 replacement package; installation does not run a time correction.')]
+                  group('base', 'Base tools', ['ntpsec-ntpdate', 'vim', 'make', 'screen', 'wget', 'ipset', 'iptables', 'curl', 'net-tools'], 'ntpsec-ntpdate is the Ubuntu 26.04 replacement package; installation does not run a time correction.')]
         groups[-1]['items'][0].update(id='ntpdate', label='ntpdate', provided_by='ntpsec-ntpdate', component_status='provided')
         meta = self._metadata(['php-fpm'])
         targets = {match for row in meta for match in re.findall(r'\b(php[0-9]+\.[0-9]+)-fpm\b', row.get('Depends', ''))}
