@@ -16,14 +16,18 @@ Ubuntu 24.04 新 VM 從公開 `install.sh` 安裝首包，需要時由安裝器�
 
 ## 2026.10.26.001
 
-初版 Network commit `b2dc7111a09668653a4edd0edbfd61d374b512c9` 的 CI `40213922576` 在 Ubuntu 24.04／26.04 各通過 441 項測試與 headless smoke。原生測試後另補外部 DHCP client 衝突檢查；正式 tag 尚未建立，最終 runtime 仍須重新驗證，正式包以實際 tag 的完整 commit 建置、驗簽及核對程式檔案。
+Network RC2 runtime 固定於 `2c2085a27e8b41a34234e198db1aed7ea5b50a81`，CI `40220782444` 在 Ubuntu 24.04／26.04 各通過 450 項測試與 headless smoke。Ubuntu 24.04 的簽章候選 `v2026.10.26.001-rc.2` 已完成 c6 四階段原生驗收，全部 PASS，證據收集沒有警告。後續文件與發行更新不改動這份受測 runtime，正式包以實際 tag 的完整 commit 建置、驗簽及核對程式檔案。
 
 Ubuntu 24.04 已由公開 `25.001` 完成首次安裝，再安裝簽章候選 `26.001-rc.1`；root／john 的實際版本、完整 commit、獨立 venv 及 update-status 通過，canonical previous 指標保留原公開 `25.001`，新舊兩份簽章 payload 均逐檔核對。候選安裝的私有驗收腳本曾誤讀公開輸出已過濾的 directory 欄位；安裝成功後改以唯讀方式補驗，沒有重裝、回退或改寫交易。該次 218 項完整基線僅存在 RAM，未保存，不能宣稱其完整前後比對通過；補驗只涵蓋先前獨立保存的 Netplan、fstab、root／john SSH 公鑰、IPv4、路由與 boot ID。
 
-Network 原生試用另外先保存完整主機基線。v2 timeout 驗收已通過真正 120 秒未確認試用與 watchdog 自動回復，完整 `/etc` 基線、原 63-byte Netplan 來源與 metadata、既有受保護物件及原交易保持不變，暫存候選移除，回到原 DHCP。Windows 與 Ubuntu 26.04 對新 `.24:22` 的 TCP 探測通過；v2 也已從新物理 SSH 連到 `.24` 並完成認證。原套用 caller 的確認遭拒，獨立 guard 為 PID1 管理的 root 程序。新連線及認證成功不等同於已完成產品確認或持久儲存。
+早期固定 IP 試驗發現手動 dhcpcd 與 networkd 同時管理 eth0，候選生效後又加入原 DHCP 位址，嚴格的單一 IPv4 檢查拒絕確認並到期回復。確認程序身份與來源後正常結束該 client，未改開機服務政策；RC2 新增有界程序衝突檢查，在預覽、獨立套用與確認前拒絕外部 client，工具不自行終止程序，安全回復仍可執行。先前私有工具也曾把舊 SSH 斷線、DHCP 換 lease 或啟動逾時誤判為失敗；原失敗證據保留，修正工具後重新完成 c6 全套驗收，未再修改 `2c2085a` runtime。
 
-固定 IP 確認試驗另外抓到手動 dhcpcd 與 networkd 同時管理 eth0：候選生效數秒後，dhcpcd 又加入原 DHCP 位址並改寫預設路由，嚴格的單一 IPv4 檢查拒絕確認，120 秒後成功回復。已依程序 executable、啟動時間、工作階段及日誌確認來源，正常結束該 client，未改開機服務政策；networkd 隨後取得不同的 DHCP lease `.22`，以原主機金鑰與 MAC 核對同一台 Ubuntu 24.04，SSH 可連。原 Netplan、1692 項受保護物件與六筆原交易保持不變。修正版新增有界程序檢查，在預覽、獨立套用與確認前拒絕外部 client；工具不終止程序，安全回復仍可執行。
+c6 從 DHCP `.220` 建立完整基線，包含完整 `/etc`、自有三組 DNS 草稿等 1693 個受保護物件、九筆原交易及 Swap。未確認的固定 `.24` 試用真正等待 120 秒，由 PID1 管理的獨立 root guard 自動回復為 DHCP `.181`；新物理 SSH `.24` 曾成功連線，原套用 caller 的確認遭拒。回復後暫存候選移除、pending 為空，原 63-byte Netplan SHA256 `8870a4e4717ea997cd9611c4e2e9093f265d68ffbe0392c76fddca25329091b6`、metadata、全基線及原交易保持一致。
 
-待補驗收：從新目標 SSH 執行產品確認並驗證 Netplan 持久儲存；透過產品回復 DHCP 並由新 SSH 確認；完成試用期間狀態觀測的分析。目前不宣告 Network 整體驗收完成，確認及回復驗收完成前不建立正式 tag。發布後另補五個公開附件的簽章／hash／原始碼核對，以及由公開 `25.001` 真正 TTY 經 Check、Review、單次程式更新確認、自動退出及新版本 root／john CLI 的完整升級證據；目前不列為已完成。
+接續由 `.181` 套用固定 `.24`，真正新目標 SSH 執行產品 CLI 確認，驗證 Netplan 持久儲存、無暫存候選、無 pending；再由固定 `.24` 回復 DHCP，新 lease 為 `.125`，重新 SSH 至 `.125` 確認。DHCP 來源最後為語意相同的 canonical JSON，root 擁有、mode0600，不宣稱還原原 YAML 位元組。兩階段 root／john 真實 SSH 版本均吻合 RC2 完整 commit；除受管 Netplan 的預期變更，其餘保護物件、九筆原交易及 Swap inode／大小保持一致。全程 boot ID `00da1bda-d50a-41a6-b1df-54b6c5dda6fe` 未變，沒有重開機驗收。
+
+真正 root SSH TTY 已在 140×40／80×24 操作 Network：填入固定 IP、gateway 與三組 DNS，Refresh 保留草稿，兩種尺寸的檢閱均以 Escape 取消；從 Storage 按鈕 Ctrl+Right 進入 Network，以及 Network／Firewall 往返通過。沒有按 Save 或主機套用確認，正常退出後程式、草稿、Netplan、cloud-init、SSH、IP／路由與 boot ID 完整性核對全數通過。私有 observer 曾無法序列化未選取的 Select 值，另一輪測試誤找其他頁面的按鈕；修正測試工具後重跑通過，產品 runtime 不變。
+
+待補：公開 `v2026.10.26.001` tag／發布與五附件的簽章、hash、原始碼核對；由公開 `25.001` 真正 TTY 經 Check、Review、單次程式更新確認、自動退出及新版本 root／john CLI 的完整升級；最終公開版本固定 `.24` 與新 SSH 確認。目前不列為已完成。
 
 下一個正式包的 validated_platforms 將列 Ubuntu 24.04／26.04。Ubuntu 24.04 的原生範圍限於程式安裝、更新與 Network；其他服務管理寫入仍只開放已驗證的 Ubuntu 26.04。這個平台標記不會放寬各功能的獨立 gate，也不回寫既有 `25.001` tag 或附件。
