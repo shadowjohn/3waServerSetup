@@ -1501,7 +1501,7 @@ class SettingApp(App):
         if self.root_busy:
             return
         tabs = self.query_one('#pages', TabbedContent)
-        ids = ['tab-overview'] + [f'tab-{key}' for key in FIELDS] + (['tab-apt', 'tab-packages'] if self.root_mode else []) + ['tab-firewall', 'tab-sqlite']
+        ids = ['tab-overview'] + [f'tab-{key}' for key in FIELDS] + (['tab-apt', 'tab-packages'] if self.root_mode else []) + ['tab-firewall', 'tab-update', 'tab-sqlite']
         # Move off the old pane before Hide can refocus its sibling and reactivate it.
         self.set_focus(tabs.query_one(Tabs))
         tabs.active = ids[(ids.index(tabs.active) + 1) % len(ids)]
@@ -1510,7 +1510,7 @@ class SettingApp(App):
         if self.root_busy:
             return
         tabs = self.query_one('#pages', TabbedContent)
-        ids = ['tab-overview'] + [f'tab-{key}' for key in FIELDS] + (['tab-apt', 'tab-packages'] if self.root_mode else []) + ['tab-firewall', 'tab-sqlite']
+        ids = ['tab-overview'] + [f'tab-{key}' for key in FIELDS] + (['tab-apt', 'tab-packages'] if self.root_mode else []) + ['tab-firewall', 'tab-update', 'tab-sqlite']
         self.set_focus(tabs.query_one(Tabs))
         tabs.active = ids[(ids.index(tabs.active) - 1) % len(ids)]
 

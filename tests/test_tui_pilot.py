@@ -45,6 +45,26 @@ class PilotTests(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(app.query_one('#pages', TabbedContent).active, 'tab-overview')
 
+    async def test_software_update_page_participates_in_both_keyboard_directions(self):
+        from server_setting.app import SettingApp
+        from textual.widgets import Button, TabbedContent
+        app = SettingApp()
+        async with app.run_test(size=(140, 40)) as pilot:
+            await pilot.pause()
+            pages = app.query_one('#pages', TabbedContent)
+            pages.active = 'tab-firewall'
+            for source, key, destination in (
+                    ('fw-preview', 'ctrl+right', 'tab-update'),
+                    ('update-check', 'ctrl+left', 'tab-firewall'),
+                    ('fw-preview', 'ctrl+right', 'tab-update'),
+                    ('update-check', 'ctrl+right', 'tab-sqlite'),
+                    ('sqlite-run', 'ctrl+left', 'tab-update')):
+                await pilot.pause()
+                app.query_one('#'+source, Button).focus()
+                await pilot.press(key)
+                await pilot.pause()
+                self.assertEqual(pages.active, destination)
+
     async def test_tabs_preview_resize_and_no_apply(self):
         from server_setting.app import SettingApp
         from textual.widgets import Button, TabbedContent, TextArea
