@@ -27,6 +27,8 @@ ID=re.compile(r'[0-9]{8}T[0-9]{6}Z-[0-9a-f]{12}')
 SAFE_PATH='/usr/sbin:/usr/bin:/sbin:/bin'
 FINAL={'APPLIED','ROLLED_BACK'}
 LIMIT=1024*1024
+PROC_LIMIT=8192
+CLIENT_NAMES={'dhcpcd','dhclient','udhcpc','connman','connmand','networkmanager'}
 
 
 class NetworkError(RuntimeError):
@@ -218,6 +220,60 @@ class Runtime:
     def boot_id(self):return self.path('/proc/sys/kernel/random/boot_id').read_text().strip()
     def proof(self,pid=None):return connection_proof(pid)
 
+    def require_exclusive(self):
+        """An external client can restore DHCP after networkd applies static IP.
+
+        Inspect executable/comm names rather than arbitrary argv text. BusyBox
+        needs its applet name, so only its first two argv elements are examined.
+        No process is signalled, reconfigured or stopped here.
+        """
+        proc=self.path('/proc')
+        try:
+            self.trusted(proc,directory=True)
+            count=0;conflicts=[]
+            with os.scandir(proc) as entries:
+                for entry in entries:
+                    if not re.fullmatch(r'[0-9]+',entry.name):continue
+                    count+=1
+                    if count>PROC_LIMIT:raise NetworkError('Process inventory exceeds the network ownership inspection bound.')
+                    if entry.is_symlink():raise NetworkError('Unexpected symbolic process directory.')
+                    directory=proc/entry.name
+                    for attempt in range(2):
+                        try:
+                            with (directory/'comm').open('rb') as stream:comm=stream.read(257)
+                            if len(comm)>256:raise NetworkError('Process identity exceeds its inspection bound.')
+                            text=comm.decode('utf-8',errors='replace').strip()
+                            names={text.split(':',1)[0].split()[0].casefold()} if text else set()
+                            try:
+                                executable=os.readlink(directory/'exe')
+                                names.add(Path(executable.removesuffix(' (deleted)')).name.casefold())
+                            except FileNotFoundError:
+                                # Kernel threads have no executable; do not
+                                # mistake a vanished task for a live identity.
+                                if not directory.exists():raise ProcessLookupError()
+                            if 'busybox' in names:
+                                with (directory/'cmdline').open('rb') as stream:argv=stream.read(4097)
+                                if len(argv)>4096:raise NetworkError('BusyBox process identity exceeds its inspection bound.')
+                                arguments=[Path(value.decode('utf-8',errors='replace')).name.casefold()
+                                           for value in argv.split(b'\0')[:2] if value]
+                                if arguments:
+                                    # With an applet symlink, argv[1] is a file
+                                    # argument (cat /tmp/dhcpcd), not an applet.
+                                    names.add(arguments[1] if arguments[0]=='busybox' and len(arguments)>1 else arguments[0])
+                            break
+                        except (FileNotFoundError,ProcessLookupError):
+                            if not directory.exists():names=set();break
+                            if attempt:raise NetworkError('Cannot verify the identity of live PID '+entry.name+'.') from None
+                    match=names&CLIENT_NAMES
+                    if match:
+                        conflicts.append(min(match)+' PID '+entry.name)
+                        if len(conflicts)>=8:break
+            if conflicts:
+                raise NetworkError('Another DHCP/network client is running ('+', '.join(conflicts)+'); explicitly stop or migrate it before using Netplan.')
+        except NetworkError:raise
+        except OSError:
+            raise NetworkError('Cannot verify exclusive network ownership from the bounded process inventory.') from None
+
     @contextmanager
     def lock(self):
         if fcntl is None:raise NetworkError('Native flock is required.')
@@ -342,6 +398,7 @@ class Runtime:
             value=self.journal(identifier);self.artifacts(value)
             if value['status']!='NETWORK_ARMED' or value['boot_id']!=self.boot_id() or now()>=value['deadline_boottime']-15:
                 raise NetworkError('An acknowledged live watchdog is required.')
+            self.require_exclusive()
             self.check_source(value)
             if self.read(value['overlay']) is not None:raise NetworkError('The volatile source already exists.')
             value['status']='NETWORK_APPLYING';self.write_journal(value)
@@ -371,6 +428,7 @@ class Runtime:
             value=self.journal(identifier);self.artifacts(value)
             if value['status']!='NETWORK_AWAITING_NEW_SSH' or value['boot_id']!=self.boot_id() or now()>=value['deadline_boottime']:
                 raise NetworkError('Network confirmation has expired.')
+            self.require_exclusive()
             self.check_source(value)
             if not self.owned_overlay(value):raise NetworkError('Trial overlay is missing.')
             proof=self.verified_proof(value,self.read_json(self.directory(identifier)+'/confirm-request.json'))

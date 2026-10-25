@@ -81,7 +81,7 @@ jobs:
         run: |
           python3 -m venv /tmp/threewa-build-venv
           /tmp/threewa-build-venv/bin/python -m pip --isolated download --require-hashes --only-binary=:all: --no-deps -r requirements-tui.lock --dest /tmp/threewa-wheelhouse
-          /tmp/threewa-build-venv/bin/python scripts/build_release.py --version "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --wheelhouse /tmp/threewa-wheelhouse --output dist --validated-platform ubuntu26.04
+          /tmp/threewa-build-venv/bin/python scripts/build_release.py --version "$RELEASE_TAG" --commit "$RELEASE_COMMIT" --wheelhouse /tmp/threewa-wheelhouse --output dist --validated-platform ubuntu26.04 --validated-platform ubuntu24.04
           sh -n dist/install.sh
       - name: Preserve unsigned build inputs for the signing job
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -140,7 +140,9 @@ jobs:
             exit 1
           fi
           printf '%s\n' "3waServerSetting $RELEASE_TAG" '' "Commit: $RELEASE_COMMIT" '' \
-            'Ubuntu 26.04 installation and management were validated on the project VM. Ubuntu 24.04 CI tests do not claim native service validation.' '' \
+            'Ubuntu 24.04 validation covers signed release installation, program updates and primary Ethernet Network management. Other service-management writes remain restricted to Ubuntu 26.04.' '' \
+            'Existing Ubuntu 26.04 installer, updater and service-management validation is retained.' '' \
+            'Network trials require a new physical SSH connection to the target IP within 120 seconds. Program rollback does not undo confirmed IP settings.' '' \
             'Download install.sh, review it, then run: sudo sh install.sh --release '"$RELEASE_TAG" '' \
             'The installer authenticates the pinned SSH release signature, verifies all payload hashes, and preserves host configuration and backups.' '' \
             'Updates and rollback change program versions only. Existing service settings, databases and disks are not reverted.' > "$RUNNER_TEMP/threewa-release-notes.md"

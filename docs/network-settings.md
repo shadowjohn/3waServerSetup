@@ -6,6 +6,8 @@ DHCP 模式下 IP／gateway 留空；三個 DNS 欄位全空時沿用 DHCP DNS�
 
 目前支援明確的單一主 Ethernet、networkd 與單一 Netplan 設定來源。複雜 route、bridge／bond／VLAN／Wi-Fi、NetworkManager、重複或不明來源會顯示停止原因。既有 IPv6 設定保留；工具不把不支援的配置改成簡化版本。
 
+執行中的外部 DHCP／網路 client（含手動啟動的 dhcpcd、dhclient、udhcpc、ConnMan）會阻擋套用；工具不自行停止它們。預覽及獨立套用／確認 worker 都會檢查，避免另一個 client 在固定 IP 生效後又加回 DHCP。這項程序檢查不涵蓋尚未啟動的其他開機網路服務。
+
 ## 操作
 
 1. 選網卡、DHCP／Static，編輯 IP、gateway、DNS。Refresh 只更新觀測，不覆蓋正在編輯的草稿。
@@ -49,4 +51,4 @@ cloud-init 網路管理必須已停用，或主機已有可信的 `cloud-init.di
 
 草稿位於 `/opt/3waServerSetting/config/network/draft.json`，不寫入 `/root/nat.sh`。網路交易使用共用 root 鎖；待確認期間其他主機修改與程式更新都會停止。程式回退只切換程式，不恢復已確認的 IP 設定。
 
-本功能的原生驗收紀錄完成後另行列入驗收文件；不得以語法或 unit test 代替實際 SSH／網路驗證。
+已完成與待補的原生驗收見 [Release／安裝更新驗收](release-validation.md#20261026001)。Ubuntu 24.04 的 Network 驗證不放寬其他服務的 Ubuntu 26.04 寫入限制；語法與 unit test 不代替實際 SSH／網路驗證。

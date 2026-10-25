@@ -415,5 +415,109 @@ class NetworkTests(unittest.TestCase):
         self.assertFalse((self.root/'run/netplan/50-cloud-init.yaml').exists())
         self.assertEqual(json.loads(self.source.read_bytes()),self.original)
 
+    def process(self,pid,comm,cmdline=None):
+        directory=self.root/'proc'/str(pid);directory.mkdir()
+        (directory/'comm').write_text(comm+'\n')
+        if cmdline is not None:(directory/'cmdline').write_bytes(cmdline)
+        return directory
+
+    def test_manual_dhcp_clients_without_services_reject_preflight(self):
+        for index,name in enumerate(('dhcpcd','dhclient','udhcpc','connmand','connman','NetworkManager'),1200):
+            directory=self.process(index,name)
+            with self.subTest(name=name):
+                status=self.manager.status();self.assertFalse(status['supported'])
+                self.assertIn(name.lower(),status['detail'].lower())
+                with self.assertRaises(RootActionError) as error:self.manager.plan(self.config)
+                self.assertEqual(error.exception.code,'NETWORK_CONFLICT')
+                self.assertFalse(self.manager.runtime.path('/run/netplan/50-cloud-init.yaml').exists())
+                self.assertFalse(any(event[0]=='netplan' for event in self.events))
+            (directory/'comm').unlink();directory.rmdir()
+
+    def test_real_executable_name_detects_renamed_client_comm(self):
+        directory=self.process(1377,'renamed-agent')
+        real=os.readlink
+        def executable(path,*args,**kwargs):
+            if Path(path)==directory/'exe':return '/usr/sbin/dhcpcd'
+            return real(path,*args,**kwargs)
+        with patch('server_setting.network_watchdog.os.readlink',side_effect=executable):
+            with self.assertRaises(RootActionError) as error:self.manager.plan(self.config)
+        self.assertEqual(error.exception.code,'NETWORK_CONFLICT')
+        self.assertIn('1377',str(error.exception))
+
+    def test_busybox_udhcpc_is_rejected_but_dhcp_text_in_python_arguments_is_not(self):
+        directory=self.process(1400,'python3',b'python3\0-c\0print("dhcpcd dhclient udhcpc")\0')
+        self.assertTrue(self.manager.status()['supported'])
+        (directory/'comm').write_text('busybox\n')
+        (directory/'cmdline').write_bytes(b'/bin/busybox\0sh\0-c\0echo dhcpcd\0')
+        self.assertTrue(self.manager.status()['supported'])
+        (directory/'cmdline').write_bytes(b'/bin/busybox\0udhcpc\0-i\0eth0\0')
+        with self.assertRaises(RootActionError) as error:self.manager.plan(self.config)
+        self.assertEqual(error.exception.code,'NETWORK_CONFLICT')
+
+    def test_worker_rechecks_client_that_starts_after_preview_before_apply(self):
+        plan=self.manager.plan(self.config);before=self.source.read_bytes();real=self.manager.runtime.run
+        def starts_late(argv,timeout=30):
+            if argv[0]=='systemd-run' and argv[-2]=='apply':self.process(1500,'dhcpcd')
+            return real(argv,timeout=timeout)
+        with patch.object(self.manager.runtime,'run',side_effect=starts_late),self.assertRaises(RootActionError):self.manager.apply(plan)
+        self.assertEqual(self.source.read_bytes(),before)
+        self.assertFalse(self.manager.runtime.path('/run/netplan/50-cloud-init.yaml').exists())
+        self.assertFalse(any(event[:2]==['netplan','apply'] for event in self.events))
+        self.assertTrue((self.root/'proc/1500/comm').exists())
+        self.manager.core._check_pending()
+
+    def test_worker_rejects_midflight_client_at_confirm_but_recovery_remains_available(self):
+        before=self.source.read_bytes();identifier=self.manager.apply(self.manager.plan(self.config))['transaction_id']
+        self.fresh(identifier);self.process(1600,'dhclient')
+        with self.assertRaises(RootActionError):self.manager.confirm(identifier)
+        self.assertEqual(self.source.read_bytes(),before)
+        self.assertNotEqual(self.manager.runtime.journal(identifier)['status'],'APPLIED')
+        self.manager.runtime.expire(identifier)
+        self.assertEqual(self.manager.runtime.journal(identifier)['status'],'ROLLED_BACK')
+        self.assertTrue((self.root/'proc/1600/comm').exists())
+        self.assertEqual(self.source.read_bytes(),before)
+
+    def test_process_inventory_is_bounded_and_does_not_scan_proc_sys(self):
+        from server_setting import network_watchdog as guard
+        self.process(1700,'sshd');self.process(1701,'python3')
+        with patch.object(guard,'PROC_LIMIT',1,create=True):
+            with self.assertRaises(RootActionError) as error:self.manager.plan(self.config)
+        self.assertEqual(error.exception.code,'NETWORK_CONFLICT')
+        (self.root/'proc/1700/comm').unlink();(self.root/'proc/1700').rmdir()
+        (self.root/'proc/1701/comm').unlink();(self.root/'proc/1701').rmdir()
+        # Existing /proc/sys/kernel/random/boot_id and cmdline are not PIDs.
+        self.assertTrue(self.manager.status()['supported'])
+
+    def test_busybox_direct_applet_does_not_treat_its_filename_argument_as_client(self):
+        directory=self.process(1800,'cat',b'cat\0/tmp/dhcpcd\0')
+        real=os.readlink
+        def executable(path,*args,**kwargs):
+            if Path(path)==directory/'exe':return '/bin/busybox'
+            return real(path,*args,**kwargs)
+        with patch('server_setting.network_watchdog.os.readlink',side_effect=executable):
+            self.assertTrue(self.manager.status()['supported'])
+
+    def test_transient_missing_comm_for_alive_client_is_retried_not_skipped(self):
+        directory=self.process(1801,'dhcpcd');real=Path.open;attempts=[]
+        def transient(path,*args,**kwargs):
+            if path==directory/'comm':
+                attempts.append(path)
+                if len(attempts)==1:raise FileNotFoundError('transient proc lookup')
+            return real(path,*args,**kwargs)
+        with patch('pathlib.Path.open',new=transient):
+            status=self.manager.status()
+        self.assertFalse(status['supported']);self.assertIn('dhcpcd',status['detail'])
+        self.assertGreaterEqual(len(attempts),2)
+
+    def test_alive_process_with_unreadable_identity_fails_closed_after_bounded_retry(self):
+        directory=self.process(1802,'busybox',b'busybox\0udhcpc\0');real=Path.open;attempts=[]
+        def missing(path,*args,**kwargs):
+            if path==directory/'cmdline':attempts.append(path);raise FileNotFoundError('still alive but unavailable')
+            return real(path,*args,**kwargs)
+        with patch('pathlib.Path.open',new=missing):
+            with self.assertRaises(RootActionError) as error:self.manager.plan(self.config)
+        self.assertEqual(error.exception.code,'NETWORK_CONFLICT')
+        self.assertEqual(len(attempts),2)
+
 
 if __name__=='__main__':unittest.main()

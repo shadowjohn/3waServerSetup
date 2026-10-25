@@ -144,7 +144,10 @@ class NetworkManager:
             'dns':node.get('nameservers',{}).get('addresses',[])})
 
     def _profile(self,allow_pending=False):
-        self._gate();inventory=self.runtime.inventory();pending=self._pending()
+        self._gate()
+        try:self.runtime.require_exclusive()
+        except guard.NetworkError as error:raise RootActionError(str(error),'NETWORK_CONFLICT') from None
+        inventory=self.runtime.inventory();pending=self._pending()
         overlay=None
         if pending:
             if len(pending)!=1:raise RootActionError('Multiple pending network transactions need inspection.','RECOVERY_REQUIRED')
