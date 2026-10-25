@@ -8,6 +8,8 @@ MariaDB 新增獨立的 [root 密碼與外連 On／Off](docs/mariadb-root-access
 
 新主機使用 GitHub Release 的安裝器；開發才 clone。安裝、明確檢查更新與程式回退見[安裝與更新操作](docs/installation.md)。版號採 `YYYY.MM.DD.NNN`，例如 `2026.10.25.001`；發布包附固定公鑰驗證的簽章 manifest、完整檔案 hash 與鎖定 wheels。啟動不自動連網更新，主機設定／備份／編譯模組留在版本目錄外。
 
+新增 [主網卡 DHCP／固定 IP](docs/network-settings.md)：Ubuntu 24.04／26.04 可編輯 IPv4 CIDR、gateway 與三組 DNS，草稿和套用分開。候選先暫存試用，120 秒內從新 IP 的新 SSH 確認後才永久儲存；原連線消失仍有獨立回復保護。
+
 - [總設計與8bit看板娘提案](docs/design.md)
 - [防火牆來源與 SSH 回復保護](docs/firewall-root.md)、[Swap 容量／啟停／fstab](docs/swap-root.md)、[根 LV 擴容](docs/root-lvm.md)
 - [APT 套件勾選安裝](docs/apt-install.md)、[羽山版 PDO SQLite 編譯／啟用／還原](docs/php-feather.md)、[手動更新 BanIP](docs/banip-root.md)
@@ -27,4 +29,4 @@ python3 -m unittest discover -s tests
 php -l tests/sqlite-smoke.php
 ```
 
-Root 與 VM 的驗收範圍見 [Ubuntu 26.04 root 驗收](docs/ubuntu26-root-validation.md)。先前本機 PHP8.3.36、SQLite3.54.1 及 SpatiaLite5.1.0 的 legacy-sql 四項測試曾通過；本輪羽山版使用自有 SQLite native probe 驗證，SpatiaLite 套件與實際應用另行驗收。Ubuntu22.04／24.04 寫入、PHP8.4 native 路線、自更新仍未完成。Linux部署根為 `/opt/3waServerSetting`；`nat.sh` 仍僅離線子工具，不會寫入 `/root/nat.sh`。
+Root 與 VM 的驗收範圍見 [Ubuntu 26.04 root 驗收](docs/ubuntu26-root-validation.md)。先前本機 PHP8.3.36、SQLite3.54.1 及 SpatiaLite5.1.0 的 legacy-sql 四項測試曾通過；本輪羽山版使用自有 SQLite native probe 驗證，SpatiaLite 套件與實際應用另行驗收。Ubuntu 24.04 的程式安裝／更新與網路功能採獨立門檻，其他服務寫入仍只開放已驗證的 Ubuntu 26.04；22.04 及 PHP8.4 native 路線尚未驗收。Linux 部署根為 `/opt/3waServerSetting`；`nat.sh` 仍僅離線子工具，不會寫入 `/root/nat.sh`。

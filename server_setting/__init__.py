@@ -6,7 +6,7 @@ from pathlib import Path
 import platform
 import re
 
-DEVELOPMENT_VERSION = '2026.10.25.001-dev'
+DEVELOPMENT_VERSION = '2026.10.26.001-dev'
 RELEASE_TAG = re.compile(r'v([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{3})(?:-rc\.[1-9][0-9]*)?')
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
@@ -109,4 +109,24 @@ def release_public(value):
         return {key: release_public(item) for key, item in value.items() if key in fields}
     if isinstance(value, (list, tuple)):
         return [release_public(item) for item in value]
+    return value
+
+
+def network_management_available():
+    """Netplan management supports root on Ubuntu 24.04 and 26.04 independently."""
+    return update_management_available()
+
+
+def network_public(value):
+    """Expose selected network settings and recovery instructions, never source YAML."""
+    fields = {'schema', 'module', 'status', 'code', 'message', 'detail', 'supported', 'interface', 'interfaces',
+              'renderer', 'config', 'mode', 'address', 'gateway', 'dns', 'observed', 'addresses', 'routes',
+              'dst', 'dev', 'source', 'path', 'sha256', 'saved', 'pending', 'transaction_id',
+              'deadline_boottime', 'remaining_seconds', 'target_ip', 'timeout_seconds', 'confirmation_command',
+              'notes', 'warnings', 'warning', 'operation', 'fingerprint', 'verification', 'persistent',
+              'cloud_init_action', 'action'}
+    if isinstance(value, dict):
+        return {key: network_public(item) for key, item in value.items() if key in fields}
+    if isinstance(value, (list, tuple)):
+        return [network_public(item) for item in value]
     return value

@@ -70,8 +70,8 @@ class UiManager:
 
     def apply(self, plan):
         self.started.set()
-        if self.block is not None:
-            self.block.wait(3)
+        if self.block is not None and not self.block.wait(30):
+            raise TimeoutError('Service UI fixture was not explicitly released.')
         self.operations.append(('apply', copy.deepcopy(plan)))
         self.current = dict(plan['values'])
         self.saved = copy.deepcopy(plan)
@@ -121,6 +121,18 @@ class UiManager:
 class RootUiTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         asyncio.get_running_loop().slow_callback_duration = 2
+        # Service UI fixtures must not observe a real host's concurrent update/network trial.
+        from unittest.mock import patch
+        for target, value in (
+                ('server_setting.release_update.ReleaseManager.status',
+                 {'supported':False, 'managed':False, 'installed':None, 'previous':None, 'pending':None,
+                  'detail':'Program management is outside this service UI fixture.'}),
+                ('server_setting.root_network.NetworkManager.status',
+                 {'supported':False, 'pending':None, 'interfaces':[], 'config':None,
+                  'detail':'Network management is outside this service UI fixture.'})):
+            observer = patch(target, return_value=value)
+            observer.start()
+            self.addCleanup(observer.stop)
 
     async def until(self, pilot, condition):
         for _ in range(100):
@@ -320,18 +332,20 @@ class RootUiTests(unittest.IsolatedAsyncioTestCase):
         manager.block = threading.Event()
         app = SettingApp(root_manager=manager)
         async with app.run_test(size=(140, 50)) as pilot:
-            await pilot.pause()
-            app.query_one('#pages', TabbedContent).active = 'tab-apache'
-            await pilot.pause()
-            await self.press_button(app, pilot, 'root-apply-recommended-apache')
-            await self.until(pilot, lambda: isinstance(app.screen, RootReview))
-            await self.press_button(app, pilot, 'root-confirm')
-            await self.until(pilot, manager.started.is_set)
-            self.assertTrue(app.root_busy)
-            self.assertTrue(app.query_one('#root-install-apache', Button).disabled)
-            await pilot.press('ctrl+q')
-            self.assertTrue(app.is_running)
-            manager.block.set()
+            try:
+                await pilot.pause()
+                app.query_one('#pages', TabbedContent).active = 'tab-apache'
+                await pilot.pause()
+                await self.press_button(app, pilot, 'root-apply-recommended-apache')
+                await self.until(pilot, lambda: isinstance(app.screen, RootReview))
+                await self.press_button(app, pilot, 'root-confirm')
+                await self.until(pilot, manager.started.is_set)
+                self.assertTrue(app.root_busy)
+                self.assertTrue(app.query_one('#root-install-apache', Button).disabled)
+                await pilot.press('ctrl+q')
+                self.assertTrue(app.is_running)
+            finally:
+                manager.block.set()
             await self.until(pilot, lambda: not app.root_busy)
             self.assertEqual(len(manager.operations), 1)
 

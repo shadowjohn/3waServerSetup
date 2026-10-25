@@ -9,7 +9,7 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
 from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, Select, Static, Switch, TabbedContent, TabPane, Tabs, TextArea
-from . import VERSION, revision, version_info, update_management_available, release_public, valid_release_tag
+from . import VERSION, revision, version_info, update_management_available, release_public, valid_release_tag, network_management_available, network_public
 from .model import ROOT, FIELDS, LABELS, preview, firewall_preview, apache_candidate
 from .probes import collect, root_management_available
 from .diagnostics import sqlite_smoke
@@ -81,7 +81,7 @@ class SettingApp(App):
     #packages-list Checkbox { width: 1fr; height: auto; min-height: 1; }
     """
 
-    def __init__(self, ascii_mode=False, plain=False, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None):
+    def __init__(self, ascii_mode=False, plain=False, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None, network_manager=None):
         super().__init__()
         self.root_manager = root_manager
         self.root_unavailable = ''
@@ -93,6 +93,17 @@ class SettingApp(App):
                 self.root_unavailable = str(error)
         self.root_mode = self.root_manager is not None
         self.update_root = update_management_available()
+        self.network_root = network_management_available()
+        self.network_manager = network_manager
+        self.network_state = {'supported':False, 'pending':None, 'detail':'Network state has not been read.'}
+        self._network_initialized = False
+        self._network_interfaces = []
+        if self.network_manager is None:
+            try:
+                from .root_network import NetworkManager
+                self.network_manager = NetworkManager()
+            except Exception:
+                self.network_state['detail'] = 'Network backend is unavailable.'
         self.release_manager = release_manager
         self.release_state = {'supported':False, 'managed':False, 'pending':None,
                               'detail':'Local release status has not been read.'}
@@ -174,7 +185,7 @@ class SettingApp(App):
         self._root_task = None
         self._mariadb_password = None
         self.mariadb_security = {}
-        mode = 'ROOT MANAGEMENT' if self.root_mode else ('SERVICE READ ONLY / PROGRAM UPDATES' if self.update_root else 'READ ONLY')
+        mode = 'ROOT MANAGEMENT' if self.root_mode else ('SERVICE READ ONLY / NETWORK AND PROGRAM MANAGEMENT' if self.network_root or self.update_root else 'READ ONLY')
         identity = version_info()
         self.sub_title = f'{identity["version"]} / commit {identity["commit"][:12]} / {identity["channel"]} | {mode}'
         self.ascii_mode = ascii_fallback(ascii_mode)
@@ -187,7 +198,7 @@ class SettingApp(App):
         yield Header()
         mode = ('ROOT / Ubuntu 26.04: review and confirm one selected-page operation. '
                 'Firewall needs a new SSH confirmation. Root LV growth is irreversible; OS accounts: view only.' if self.root_mode else
-                'Service settings are READ ONLY on this platform. Software update switches require a separate review.' if self.update_root else
+                'Service settings are READ ONLY on this platform. Network and program changes use their own reviewed operations.' if self.network_root or self.update_root else
                 'READ ONLY: drafts and previews stay in memory. No system apply / installs / SSH.')
         if self.root_unavailable:
             mode += ' Management unavailable: ' + self.root_unavailable
@@ -351,6 +362,36 @@ class SettingApp(App):
                                     yield Button('Read build status', id='feather-status')
                                 yield TextArea('', read_only=True, id='out-php-feather', classes='output')
                                 yield TextArea('', read_only=True, id='out-packages', classes='output')
+                    with TabPane('Network', id='tab-network'):
+                        with VerticalScroll():
+                            yield Static('Reading Ethernet / Netplan status...', id='network-live', classes='module-state', markup=False)
+                            yield Static('Main Ethernet interface only. DHCP with blank DNS inherits DHCP DNS; manual DNS replaces it. Static IPv4 uses CIDR. Save keeps a private draft. Apply trials the configuration with an automatic rollback deadline; persistence requires a NEW SSH connection to the target IP. The current console cannot confirm it.', classes='hint', markup=False)
+                            with Horizontal(classes='field'):
+                                yield Label('Ethernet interface')
+                                yield Select([], id='network-interface', disabled=not self.network_root)
+                            with Horizontal(classes='field'):
+                                yield Label('IPv4 mode')
+                                yield Select([('DHCP', 'dhcp'), ('Static IPv4', 'static')], value='dhcp', allow_blank=False, id='network-mode', disabled=not self.network_root)
+                            for identifier, label, placeholder in (
+                                    ('address', 'Static IPv4 / CIDR', '192.168.137.24/24'),
+                                    ('gateway', 'IPv4 gateway (optional)', '192.168.137.1'),
+                                    ('dns1', 'DNS 1 (optional)', '1.1.1.1'),
+                                    ('dns2', 'DNS 2 (optional)', '8.8.8.8'),
+                                    ('dns3', 'DNS 3 (optional)', 'IPv4 or IPv6 resolver')):
+                                with Horizontal(classes='field'):
+                                    yield Label(label)
+                                    yield Input('', placeholder=placeholder, max_length=64, id='network-'+identifier, disabled=not self.network_root)
+                            with Horizontal(classes='buttons'):
+                                yield Button('Read network status', id='network-status')
+                                if self.network_root:
+                                    yield Button('Load current', id='network-current', disabled=True)
+                                    yield Button('Load saved draft', id='network-saved', disabled=True)
+                            if self.network_root:
+                                with Horizontal(classes='buttons'):
+                                    yield Button('Save draft', id='network-save', disabled=True)
+                                    yield Button('Review & apply', id='network-apply', variant='warning', disabled=True)
+                                    yield Button('Recover pending', id='network-recover', disabled=True)
+                            yield TextArea('', read_only=True, id='out-network', classes='output')
                     with TabPane('Firewall', id='tab-firewall'):
                         with VerticalScroll():
                             if self.root_mode:
@@ -431,6 +472,8 @@ class SettingApp(App):
         if self.root_mode:
             self.set_interval(1, self._fw_tick)
             self.set_interval(1, self._banip_tick)
+        if self.network_root:
+            self.set_interval(1, self._network_tick)
 
     def adapt_layout(self, size=None):
         try:
@@ -463,6 +506,7 @@ class SettingApp(App):
                 configured = '\n'.join(f'{key}: {value}' for key, value in item['configured'].items()) or 'UNKNOWN'
                 self.query_one(f'#state-{module}', Static).update(f'[{item["status"]}] {item["detail"]}\nObserved selected config:\n{configured}\nEffective runtime: {item["runtime"]}')
         self.query_one('#overview', Static).update('\n\n'.join(lines))
+        await self._refresh_network_status()
         await self._refresh_release_status()
         if self.root_mode:
             for module in ROOT_MODULES:
@@ -527,6 +571,7 @@ class SettingApp(App):
         self._php_feather_update_controls()
         self._startup_update_controls()
         self._release_update_controls()
+        self._network_update_controls()
         self.query_one('#banip-update', Button).disabled = self._mutation_pending() or not self.banip_state.get('supported')
         if self._mutation_pending():
             for button in self.query(Button):
@@ -534,10 +579,147 @@ class SettingApp(App):
                     button.disabled = True
 
     def _network_pending(self):
-        return bool(self.firewall_state.get('pending') or self.banip_state.get('pending'))
+        return bool(self.firewall_state.get('pending') or self.banip_state.get('pending') or self.network_state.get('pending'))
 
     def _mutation_pending(self):
         return self._network_pending() or bool(self.startup_state.get('pending') or self.release_state.get('pending'))
+
+    def _set_network_config(self, config):
+        interface = config.get('interface')
+        if isinstance(interface, str) and interface not in self._network_interfaces:
+            self._network_interfaces.append(interface)
+            self.query_one('#network-interface', Select).set_options([(name, name) for name in self._network_interfaces])
+        if interface in self._network_interfaces:
+            self.query_one('#network-interface', Select).value = interface
+        self.query_one('#network-mode', Select).value = config.get('mode', 'dhcp')
+        self.query_one('#network-address', Input).value = config.get('address', '')
+        self.query_one('#network-gateway', Input).value = config.get('gateway', '')
+        dns = config.get('dns', [])
+        for index in range(3):
+            self.query_one('#network-dns'+str(index+1), Input).value = dns[index] if index < len(dns) else ''
+        self._network_initialized = True
+
+    def _network_config(self):
+        interface = self.query_one('#network-interface', Select).value
+        mode = self.query_one('#network-mode', Select).value
+        return {'interface':interface if isinstance(interface, str) else '', 'mode':mode,
+                'address':self.query_one('#network-address', Input).value.strip() if mode == 'static' else '',
+                'gateway':self.query_one('#network-gateway', Input).value.strip() if mode == 'static' else '',
+                'dns':[self.query_one('#network-dns'+str(index), Input).value.strip() for index in range(1, 4)
+                       if self.query_one('#network-dns'+str(index), Input).value.strip()]}
+
+    async def _refresh_network_status(self):
+        try:
+            if self.network_manager is not None:
+                self.network_state = await asyncio.to_thread(self.network_manager.status)
+        except Exception:
+            self.network_state = {'supported':False, 'pending':self.network_state.get('pending'),
+                                  'detail':'Network status cannot be verified; preserve the pending recovery instructions.'}
+        self.query_one('#network-live', Static).update(json.dumps(network_public(self.network_state), ensure_ascii=True, default=str))
+        interfaces = self.network_state.get('interfaces') or []
+        if interfaces and interfaces != self._network_interfaces:
+            selected = self.query_one('#network-interface', Select).value
+            self._network_interfaces = list(interfaces)
+            self.query_one('#network-interface', Select).set_options([(name, name) for name in interfaces])
+            if selected in interfaces:
+                self.query_one('#network-interface', Select).value = selected
+        if not self._network_initialized and self.network_state.get('config'):
+            self._set_network_config(self.network_state['config'])
+        if not self.root_busy:
+            self._network_update_controls()
+
+    async def _network_tick(self):
+        if self.root_busy or not self.network_state.get('pending'):
+            return
+        await self._refresh_network_status()
+        if self.root_mode:
+            self._update_root_buttons()
+        else:
+            self._release_update_controls()
+
+    def _network_update_controls(self):
+        self.query_one('#network-status', Button).disabled = self.root_busy or self.network_manager is None
+        ready = bool(self.network_root and self.network_manager is not None and self.network_state.get('supported'))
+        editable = ready and not self.root_busy and not self._mutation_pending()
+        for identifier in ('interface', 'mode', 'dns1', 'dns2', 'dns3'):
+            self.query_one('#network-'+identifier).disabled = not editable
+        static = self.query_one('#network-mode', Select).value == 'static'
+        for identifier in ('address', 'gateway'):
+            self.query_one('#network-'+identifier).disabled = not editable or not static
+        if not self.network_root:
+            return
+        for identifier in ('current', 'saved'):
+            self.query_one('#network-'+identifier, Button).disabled = self.root_busy or not ready or (identifier == 'saved' and not self.network_state.get('saved'))
+        for identifier in ('save', 'apply'):
+            self.query_one('#network-'+identifier, Button).disabled = not editable
+        foreign = bool(self.firewall_state.get('pending') or self.banip_state.get('pending') or self.startup_state.get('pending') or self.release_state.get('pending'))
+        self.query_one('#network-recover', Button).disabled = self.root_busy or self.network_manager is None or foreign or not self.network_state.get('pending')
+
+    def _begin_network_operation(self, operation):
+        if self.root_busy or self.network_manager is None or operation not in {'status', 'current', 'saved', 'save', 'apply', 'recover'}:
+            return
+        if operation != 'status' and not self.network_root:
+            self._root_result('network', {'status':'DENIED', 'code':'ROOT_REQUIRED', 'message':'Network changes require root on Ubuntu 24.04 or 26.04.'})
+            return
+        if operation in {'save', 'apply'} and self._mutation_pending():
+            return
+        if operation == 'recover' and (self.firewall_state.get('pending') or self.banip_state.get('pending') or self.startup_state.get('pending') or self.release_state.get('pending')):
+            return
+        config = self._network_config() if operation in {'save', 'apply'} else None
+        self._start_root_busy()
+        self._root_task = asyncio.create_task(self._prepare_network_operation(operation, config))
+
+    async def _prepare_network_operation(self, operation, config):
+        try:
+            if operation in {'status', 'current'}:
+                await self._refresh_network_status()
+                if operation == 'current' and self.network_state.get('config'):
+                    self._set_network_config(self.network_state['config'])
+                self._root_result('network', self.network_state)
+            elif operation == 'saved':
+                saved = await asyncio.to_thread(self.network_manager.load_saved)
+                if saved:
+                    self._set_network_config(saved)
+                self._root_result('network', {'status':'DRAFT_LOADED' if saved else 'NO_SAVED_CONFIG'})
+            elif operation == 'save':
+                self._root_result('network', await asyncio.to_thread(self.network_manager.save, config))
+                await self._refresh_network_status()
+            else:
+                plan = await asyncio.to_thread(self.network_manager.plan, config) if operation == 'apply' else {'module':'network', 'operation':'recover', 'pending':self.network_state.get('pending')}
+                detail = ('Trial network change: open a NEW SSH connection to the target IP and run its confirmation command before the rollback timeout. '
+                          'This console cannot confirm. Unconfirmed changes roll back automatically. Recover restores the network settings from before the pending trial.\n\n'
+                          + json.dumps(network_public(plan), ensure_ascii=True, indent=2, default=str))
+                self.push_screen(RootReview('Network / '+operation+': review target and rollback', detail),
+                                 lambda confirmed: self._network_review_completed(confirmed, operation, plan))
+                return
+        except Exception as error:
+            self._network_error(error)
+        self._finish_root_operation()
+
+    def _network_error(self, error):
+        code = getattr(error, 'code', 'NETWORK_FAILED')
+        if not isinstance(code, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', code):
+            code = 'NETWORK_FAILED'
+        self._root_result('network', {'status':'FAILED', 'code':code, 'message':'Network operation failed. Read network status for pending recovery instructions.'})
+
+    def _network_review_completed(self, confirmed, operation, plan):
+        if not confirmed:
+            self._root_result('network', {'status':'CANCELLED', 'message':'No network operation was performed.'})
+            self._finish_root_operation()
+            return
+        self._root_task = asyncio.create_task(self._execute_network_operation(operation, plan))
+
+    async def _execute_network_operation(self, operation, plan):
+        try:
+            result = await asyncio.to_thread(self.network_manager.apply, plan) if operation == 'apply' else await asyncio.to_thread(
+                self.network_manager.recover, (plan.get('pending') or {}).get('transaction_id'))
+            self._root_result('network', result)
+            await self._refresh_network_status()
+        except Exception as error:
+            self._network_error(error)
+            await self._refresh_network_status()
+        finally:
+            self._finish_root_operation()
 
     async def _refresh_release_status(self):
         try:
@@ -1232,12 +1414,15 @@ class SettingApp(App):
             self._update_root_buttons()
         else:
             self._release_update_controls()
+            self._network_update_controls()
 
     def _root_result(self, module, value):
         if module == 'startup':
             value = self._startup_public(value)
         elif module == 'update':
             value = release_public(value)
+        elif module == 'network':
+            value = network_public(value)
         selector = '#fw-output' if module == 'firewall' else f'#out-{module}'
         self.query_one(selector, TextArea).load_text(json.dumps(value, ensure_ascii=True, indent=2, default=str))
 
@@ -1501,7 +1686,7 @@ class SettingApp(App):
         if self.root_busy:
             return
         tabs = self.query_one('#pages', TabbedContent)
-        ids = ['tab-overview'] + [f'tab-{key}' for key in FIELDS] + (['tab-apt', 'tab-packages'] if self.root_mode else []) + ['tab-firewall', 'tab-update', 'tab-sqlite']
+        ids = ['tab-overview'] + [f'tab-{key}' for key in FIELDS] + (['tab-apt', 'tab-packages'] if self.root_mode else []) + ['tab-network', 'tab-firewall', 'tab-update', 'tab-sqlite']
         # Move off the old pane before Hide can refocus its sibling and reactivate it.
         self.set_focus(tabs.query_one(Tabs))
         tabs.active = ids[(ids.index(tabs.active) + 1) % len(ids)]
@@ -1510,12 +1695,14 @@ class SettingApp(App):
         if self.root_busy:
             return
         tabs = self.query_one('#pages', TabbedContent)
-        ids = ['tab-overview'] + [f'tab-{key}' for key in FIELDS] + (['tab-apt', 'tab-packages'] if self.root_mode else []) + ['tab-firewall', 'tab-update', 'tab-sqlite']
+        ids = ['tab-overview'] + [f'tab-{key}' for key in FIELDS] + (['tab-apt', 'tab-packages'] if self.root_mode else []) + ['tab-network', 'tab-firewall', 'tab-update', 'tab-sqlite']
         self.set_focus(tabs.query_one(Tabs))
         tabs.active = ids[(ids.index(tabs.active) - 1) % len(ids)]
 
     def on_select_changed(self, event: Select.Changed):
-        if event.select.id == 'fw-preset' and isinstance(event.value, str):
+        if event.select.id == 'network-mode' and self.is_mounted:
+            self._network_update_controls()
+        elif event.select.id == 'fw-preset' and isinstance(event.value, str):
             self.query_one('#fw-ports', Input).value = event.value
         elif self.root_mode and event.select.id == 'fw-service' and isinstance(event.value, str):
             self._fw_show_selected(event.value)
@@ -1531,6 +1718,9 @@ class SettingApp(App):
             return
         if action.startswith('update-'):
             self._begin_release_operation(action[len('update-'):])
+            return
+        if action.startswith('network-'):
+            self._begin_network_operation(action[len('network-'):])
             return
         if self.root_mode and action.startswith('startup-'):
             self._begin_startup_operation(action[len('startup-'):])

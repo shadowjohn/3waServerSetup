@@ -11,7 +11,7 @@ import re
 import stat
 import sys
 import warnings
-from . import VERSION, revision, version_info, update_management_available, release_public, valid_release_tag
+from . import VERSION, revision, version_info, update_management_available, release_public, valid_release_tag, network_management_available, network_public
 from .probes import collect, root_management_available
 from .model import FIELDS
 
@@ -487,7 +487,56 @@ def update_command(args, manager=None):
                               'message':'Release operation failed; the previous program is retained unless recovery is required. Inspect local update status.'}, 1)
 
 
-def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None):
+def network_command(args, manager=None):
+    operation = next(name for name in ('status', 'load', 'save', 'plan', 'apply', 'confirm', 'recover')
+                     if (getattr(args, 'network_'+name) is not None if name in {'confirm', 'recover'} else getattr(args, 'network_'+name)))
+    if operation != 'status' and not network_management_available():
+        return json_response({'status':'DENIED', 'module':'network', 'code':'ROOT_REQUIRED',
+                              'message':'Network management requires root on Ubuntu 24.04 or 26.04.'}, 1)
+    if operation in {'save', 'apply', 'confirm', 'recover'} and not args.confirm:
+        return json_response({'status':'ERROR', 'module':'network', 'code':'CONFIRMATION_REQUIRED',
+                              'message':'Network mutations require --confirm. Confirm the target only from a new SSH connection.'}, 2)
+    if (operation in {'save', 'plan', 'apply'}) != (args.network_config is not None):
+        raise ValueError('Only --network-save/plan/apply require and accept --network-config FILE (or - for stdin)')
+    transaction_id = (args.network_confirm if operation == 'confirm' else args.network_recover) or None
+    if ((operation == 'confirm' and transaction_id is None) or
+            (transaction_id is not None and not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.-]{0,127}', transaction_id))):
+        raise ValueError('Use the transaction ID returned by the network operation')
+    try:
+        config = read_firewall_config(args.network_config) if args.network_config is not None else None
+    except (OSError, ValueError, UnicodeError, TypeError):
+        return json_response({'status':'ERROR', 'module':'network', 'code':'INVALID_CONFIG',
+                              'message':'Use bounded UTF-8 network JSON in a trusted regular file or explicit stdin.'}, 2)
+    try:
+        if manager is None:
+            from .root_network import NetworkManager
+            manager = NetworkManager()
+        if operation == 'status':
+            result = manager.status()
+        elif operation == 'load':
+            config = manager.load_saved()
+            result = {'status':'LOADED' if config else 'NO_SAVED_CONFIG', 'module':'network', **({'config':config} if config else {})}
+        elif operation == 'save':
+            result = manager.save(config)
+        elif operation in {'plan', 'apply'}:
+            plan = manager.plan(config)
+            if operation == 'plan':
+                return json_response({'status':'PLANNED', 'module':'network', 'plan':network_public(plan)})
+            result = manager.apply(plan)
+        elif operation == 'confirm':
+            result = manager.confirm(transaction_id)
+        else:
+            result = manager.recover(transaction_id)
+        return json_response(network_public(result))
+    except Exception as error:
+        code = getattr(error, 'code', 'NETWORK_FAILED')
+        if not isinstance(code, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', code):
+            code = 'NETWORK_FAILED'
+        return json_response({'status':'FAILED', 'module':'network', 'code':code,
+                              'message':'Network operation failed. Read network status for pending recovery instructions.'}, 1)
+
+
+def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None, network_manager=None):
     parser = CommandParser(description='3waServerSetting local console and explicit root operations')
     identity = version_info()
     parser.add_argument('--version', action='version', version=f'{identity["version"]} / commit {identity["commit"]} / {identity["channel"]}')
@@ -497,6 +546,11 @@ def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, 
     parser.add_argument('--plain', action='store_true', help='Plain text fallback for terminals without color/Unicode')
     parser.add_argument('--smoke', action='store_true', help='Headless Textual startup/keyboard/resize check')
     root_modes = parser.add_mutually_exclusive_group()
+    for operation in ('status', 'load', 'save', 'plan', 'apply'):
+        root_modes.add_argument('--network-'+operation, action='store_true')
+    root_modes.add_argument('--network-confirm', metavar='TRANSACTION_ID', help='Confirm only from a fresh SSH connection to the target IP')
+    root_modes.add_argument('--network-recover', nargs='?', const='', metavar='TRANSACTION_ID', help='Recover the selected or unique pending network transaction')
+    parser.add_argument('--network-config', metavar='FILE', help='Ethernet DHCP/static IPv4 and optional DNS JSON; - reads bounded stdin')
     for operation in ('status', 'check', 'plan', 'apply', 'rollback'):
         root_modes.add_argument('--update-' + operation, action='store_true')
     parser.add_argument('--release-tag', metavar='TAG', help='Select vYYYY.MM.DD.NNN (001..999; optional -rc.N) for an explicit release check/plan/apply')
@@ -566,6 +620,9 @@ def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, 
         is_feather_command = any(getattr(args, 'php_feather_' + operation) for operation in ('status', 'plan', 'apply', 'restore'))
         is_startup_command = any(getattr(args, 'startup_' + operation) for operation in ('status', 'load', 'plan', 'save', 'apply', 'run', 'restore'))
         is_update_command = any(getattr(args, 'update_' + operation) for operation in ('status', 'check', 'plan', 'apply', 'rollback'))
+        is_network_command = any(getattr(args, 'network_'+operation) for operation in ('status', 'load', 'save', 'plan', 'apply')) or args.network_confirm is not None or args.network_recover is not None
+        if not is_network_command and args.network_config is not None:
+            raise ValueError('--network-config requires --network-save/plan/apply')
         if args.release_tag is not None:
             if not (args.update_check or args.update_plan or args.update_apply) or not valid_release_tag(args.release_tag):
                 raise ValueError('--release-tag requires an explicit update check/plan/apply and a valid release tag')
@@ -581,6 +638,11 @@ def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, 
             raise ValueError('--config requires a firewall plan/save/apply operation')
         if not is_security_command and (args.remote is not None or args.change_root_password or args.password_stdin):
             raise ValueError('MariaDB security options require --mariadb-security-plan/apply')
+        if is_network_command:
+            if (args.status_json or args.text or args.plain or args.smoke or args.values is not None
+                    or args.service_active is not None or args.service_enabled is not None):
+                raise ValueError('Network operations cannot be combined with text/status/smoke or service targets')
+            return network_command(args, network_manager)
         if is_update_command:
             if (args.status_json or args.text or args.plain or args.smoke or args.values is not None
                     or args.service_active is not None or args.service_enabled is not None):

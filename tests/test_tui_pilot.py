@@ -14,7 +14,8 @@ class PilotTests(unittest.IsolatedAsyncioTestCase):
         from unittest.mock import patch
         for target in ('server_setting.probes.root_management_available',
                        'server_setting.app.root_management_available',
-                       'server_setting.app.update_management_available'):
+                       'server_setting.app.update_management_available',
+                       'server_setting.app.network_management_available'):
             actor = patch(target, return_value=False)
             actor.start()
             self.addCleanup(actor.stop)
