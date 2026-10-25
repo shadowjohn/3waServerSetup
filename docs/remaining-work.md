@@ -12,7 +12,9 @@
 | 維運 | Release 後續維護 | CI、簽章發行包、安裝器、明確更新與程式回退見[安裝操作](installation.md)；自動排程更新、簽章 key 輪替及舊版清理尚未提供 |
 | 維運 | 備份與記錄保留 | 尚無交易備份／編譯產物／日誌的保留天數與容量清理介面 |
 | 驗收 | Hyper-V 匯入還原開機 | 完整匯出與 SHA256 已核對；尚未真的匯入並開機驗證。`.26` 的 Startup 已於 2026-10-25 完成實際 VM reboot／開機執行／新 SSH 連線與測後還原驗證 |
-| 驗收 | Network 正式版端到端流程 | Ubuntu 24.04 RC2 的 c6 四階段原生驗收、真正 Network TTY 寬窄畫面檢閱／取消已通過；公開 `26.001` 附件核對、舊版 TTY 完整升級與最終公開版固定 `.24` 新 SSH 確認仍待補，見[Release 驗收](release-validation.md#20261026001) |
+| 已完成 | Network 正式版端到端流程 | Ubuntu 24.04 RC2 四階段原生驗收、Network TTY 寬窄畫面檢閱／取消、公開 `26.001` 五附件核對、公開 `25.001` 真正 TTY 更新及最終公開版固定 `.24` 新 SSH 確認均通過，見[Release 驗收](release-validation.md#20261026001) |
+| 已完成 | Ubuntu 26.04 正式 `26.001` 更新後核對 | 公開 `25.001` 更新、root／john CLI、完整簽章 payload／ready 及原 98 檔案／81 筆交易狀態、boot、Swap、LV、BanIP、防火牆、Startup、Feather 唯讀保護核對均通過；最終 remote_writes=0 |
+| 整合 | Ubuntu 26.04 額外 backend 網路來源 | `/run/systemd/network/zzzz-dracut-default.network` 觸發 Network 保守門檻；既有固定 `.26` 保留，未接管、刪除或套用。來源整合／遷移需獨立實作與驗證，本輪保留現況 |
 | 驗收 | 其他平台與壓力 | Ubuntu 24.04 的安裝／更新與網路功能獨立驗收，不代表其他服務管理已通過；22.04、多 PHP／pool、XFS／Btrfs、Swap 記憶體壓力未驗收 |
 
 VPN／PPP／NAT／FORWARD、磁碟分割區與 PV 成長不在目前受管範圍。使用者選擇測試後關閉服務防火牆，以及建議 Swap 值只載入表單而不自動套用，都不是未完成項目。

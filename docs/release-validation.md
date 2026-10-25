@@ -16,7 +16,9 @@ Ubuntu 24.04 新 VM 從公開 `install.sh` 安裝首包，需要時由安裝器�
 
 ## 2026.10.26.001
 
-Network RC2 runtime 固定於 `2c2085a27e8b41a34234e198db1aed7ea5b50a81`，CI `40220782444` 在 Ubuntu 24.04／26.04 各通過 450 項測試與 headless smoke。Ubuntu 24.04 的簽章候選 `v2026.10.26.001-rc.2` 已完成 c6 四階段原生驗收，全部 PASS，證據收集沒有警告。後續文件與發行更新不改動這份受測 runtime，正式包以實際 tag 的完整 commit 建置、驗簽及核對程式檔案。
+公開 tag `v2026.10.26.001` 固定於 `4814a124223b6c5786828996ee8acd8859be4149`。Release `40225849332` 的來源解析、Ubuntu 24.04／26.04 各 450 項測試與 headless smoke、建包及發布全部通過。五個公開附件已匿名下載，核對固定公鑰簽章、SHA256SUMS、archive／逐檔 hash、Git tag 完整 commit 與原始碼；公開 runtime 也逐檔吻合原生受測 RC2。
+
+RC2 runtime 來源為 `2c2085a27e8b41a34234e198db1aed7ea5b50a81`。Ubuntu 24.04 的簽章候選 `v2026.10.26.001-rc.2` 已完成 c6 四階段原生驗收，全部 PASS，證據收集沒有警告；後續文件與發行更新沒有改動這份受測 runtime。
 
 Ubuntu 24.04 已由公開 `25.001` 完成首次安裝，再安裝簽章候選 `26.001-rc.1`；root／john 的實際版本、完整 commit、獨立 venv 及 update-status 通過，canonical previous 指標保留原公開 `25.001`，新舊兩份簽章 payload 均逐檔核對。候選安裝的私有驗收腳本曾誤讀公開輸出已過濾的 directory 欄位；安裝成功後改以唯讀方式補驗，沒有重裝、回退或改寫交易。該次 218 項完整基線僅存在 RAM，未保存，不能宣稱其完整前後比對通過；補驗只涵蓋先前獨立保存的 Netplan、fstab、root／john SSH 公鑰、IPv4、路由與 boot ID。
 
@@ -28,6 +30,12 @@ c6 從 DHCP `.220` 建立完整基線，包含完整 `/etc`、自有三組 DNS �
 
 真正 root SSH TTY 已在 140×40／80×24 操作 Network：填入固定 IP、gateway 與三組 DNS，Refresh 保留草稿，兩種尺寸的檢閱均以 Escape 取消；從 Storage 按鈕 Ctrl+Right 進入 Network，以及 Network／Firewall 往返通過。沒有按 Save 或主機套用確認，正常退出後程式、草稿、Netplan、cloud-init、SSH、IP／路由與 boot ID 完整性核對全數通過。私有 observer 曾無法序列化未選取的 Select 值，另一輪測試誤找其他頁面的按鈕；修正測試工具後重跑通過，產品 runtime 不變。
 
-待補：公開 `v2026.10.26.001` tag／發布與五附件的簽章、hash、原始碼核對；由公開 `25.001` 真正 TTY 經 Check、Review、單次程式更新確認、自動退出及新版本 root／john CLI 的完整升級；最終公開版本固定 `.24` 與新 SSH 確認。目前不列為已完成。
+Ubuntu 24.04 已由真正 root SSH TTY 從公開 `25.001` 更新到公開 `26.001`：Check 核對公開簽章、目標 tag 與完整 commit，Review 後只送出一次外部程式更新確認。舊 App 自行正常退出，結果為 UPDATED／restart_required；新 root／john SSH 的 CLI 版本、update-status、簽章來源與實體版本 venv 均吻合公開 commit。主機設定、網路、boot ID 及原交易完整性核對通過，只新增一筆 APPLIED／UPDATED 的程式更新交易。
 
-下一個正式包的 validated_platforms 將列 Ubuntu 24.04／26.04。Ubuntu 24.04 的原生範圍限於程式安裝、更新與 Network；其他服務管理寫入仍只開放已驗證的 Ubuntu 26.04。這個平台標記不會放寬各功能的獨立 gate，也不回寫既有 `25.001` tag 或附件。
+最終公開版本已從 DHCP `.125` 套用 `192.168.137.24/24`，gateway 為 `192.168.137.1`，DNS 僅 `192.168.137.1`；由新目標 SSH 執行產品 CLI 確認，驗證來源持久儲存、無暫存候選、無 pending，並儲存與實際設定一致的單 DNS 草稿。新 root／john SSH、完整簽章 payload 及其餘主機保護檢查均通過，十四筆原交易與 Swap 保持不變。另從 `.24` 讀取 Network 狀態／草稿並透過真正 HTTPS GitHub 檢查更新，得到 UP_TO_DATE、signature_verified=true 與完整 commit `4814a124223b6c5786828996ee8acd8859be4149`。全程 boot ID 未變，沒有重開機。
+
+Ubuntu 26.04 已在約 50.179 秒內由公開 `25.001` 更新至 `26.001`，root／john 的真實 CLI、實體版本 venv 與完整公開 commit 均通過，新 john SSH 版本也再次核對成功。更新後完整簽章 manifest、逐檔 hash 與 release-ready 驗證通過；唯讀檢查確認原 98 個檔案 stamp、81 筆原交易狀態、Startup 完整狀態、16 GiB Swap inode／大小、root LV、BanIP、服務防火牆及 Feather 狀態均與基線一致。boot ID `a0d3aa3f-39ce-44f9-83b6-4b9a4ef7b8d4` 未變，最終驗證的 remote_writes 為 0，沒有重啟或關閉 VM。
+
+該 Ubuntu 26.04 主機的 Network 唯讀檢查回報 supported=false，原因精確為 `Custom backend network files require separate integration.`：除 `10-netplan-eth0.network`（235 bytes）外，另有 `/run/systemd/network/zzzz-dracut-default.network`（131 bytes）。保守門檻因此停止，未自動接管、刪除或套用；既有 `192.168.137.26/24` 與主機設定保留。本輪完整 Network 原生寫入端到端驗收在 Ubuntu 24.04 完成，不把這台 Ubuntu 26.04 的額外 backend 現況列為已支援或已寫入；來源整合與遷移需獨立實作與驗證。
+
+已發布包的 validated_platforms 列出 Ubuntu 24.04／26.04。Ubuntu 24.04 的原生範圍限於程式安裝、更新與 Network；其他服務管理寫入仍只開放已驗證的 Ubuntu 26.04。這個平台標記沒有放寬各功能的獨立 gate，也沒有回寫既有 `25.001` tag 或附件。Ubuntu 22.04 仍延後，未新增安裝器或主機寫入支援。
