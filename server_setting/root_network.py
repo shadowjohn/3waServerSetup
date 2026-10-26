@@ -18,6 +18,7 @@ _NAME=re.compile(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}')
 _YAML_READER=r'''
 import json,pathlib,sys,yaml
 from yaml.events import AliasEvent
+from yaml.nodes import MappingNode,ScalarNode,SequenceNode
 class Loader(yaml.SafeLoader): pass
 def mapping(loader,node,deep=False):
     result={}
@@ -27,10 +28,55 @@ def mapping(loader,node,deep=False):
         result[name]=loader.construct_object(value,deep=deep)
     return result
 Loader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG,mapping)
-raw=pathlib.Path(sys.argv[1]).read_bytes()
+def children(node):
+    if isinstance(node,MappingNode):return [child for pair in node.value for child in pair]
+    if isinstance(node,SequenceNode):return node.value
+    if isinstance(node,ScalarNode):return ()
+    raise ValueError('unknown YAML node')
+def cloud_network(raw):
+    loader=Loader(raw)
+    try:
+        root=loader.get_single_node()
+        if root is None:return {}
+        # Count the composed graph once: irrelevant logging aliases must never
+        # be expanded or constructed, including cyclic/large alias DAGs.
+        pending=[root];seen=set();references={id(root):1};edges=0
+        while pending:
+            node=pending.pop();identity=id(node)
+            if identity in seen:continue
+            seen.add(identity)
+            if len(seen)>4096:raise ValueError('bounded YAML graph required')
+            for child in children(node):
+                edges+=1
+                if edges>8192:raise ValueError('bounded YAML graph required')
+                identity=id(child);references[identity]=references.get(identity,0)+1;pending.append(child)
+        if not isinstance(root,MappingNode) or root.tag!=yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG:
+            raise ValueError('cloud YAML root must be an ordinary mapping')
+        keys=set();network=None
+        for key,value in root.value:
+            if not isinstance(key,ScalarNode) or key.tag!='tag:yaml.org,2002:str' or key.value in keys or key.value=='<<':
+                raise ValueError('ambiguous cloud YAML key')
+            keys.add(key.value)
+            if key.value=='network':
+                if references[id(key)]!=1:raise ValueError('cloud network aliases unsupported')
+                network=value
+        if network is None:return {}
+        pending=[(network,1)]
+        while pending:
+            node,depth=pending.pop()
+            if references[id(node)]!=1 or depth>32:raise ValueError('cloud network aliases or excessive depth unsupported')
+            pending.extend((child,depth+1) for child in children(node))
+        return {'network':loader.construct_object(network,deep=True)}
+    finally:loader.dispose()
+cloud=len(sys.argv)==3 and sys.argv[1]=='--cloud-network'
+if not cloud and len(sys.argv)!=2:raise ValueError('unknown YAML reader mode')
+with pathlib.Path(sys.argv[-1]).open('rb') as source:raw=source.read(65537)
 if len(raw)>65536: raise ValueError('bounded YAML required')
-if any(isinstance(event,AliasEvent) for event in yaml.parse(raw)): raise ValueError('YAML aliases unsupported')
-print(json.dumps(yaml.load(raw,Loader=Loader),allow_nan=False))
+if cloud:value=cloud_network(raw)
+else:
+    if any(isinstance(event,AliasEvent) for event in yaml.parse(raw)): raise ValueError('YAML aliases unsupported')
+    value=yaml.load(raw,Loader=Loader)
+print(json.dumps(value,allow_nan=False))
 '''
 
 
@@ -94,8 +140,8 @@ class NetworkManager:
         try:ensure_current_release(_RUNNING_CODE_ROOT)
         except ReleaseError as error:raise RootActionError(str(error),error.code) from None
 
-    def _parse(self,absolute):
-        result=self.host.run(['python3','-I','-c',_YAML_READER,str(self.runtime.path(absolute))],timeout=10)
+    def _parse(self,absolute,cloud=False):
+        result=self.host.run(['python3','-I','-c',_YAML_READER,*(['--cloud-network'] if cloud else []),str(self.runtime.path(absolute))],timeout=10)
         if result.returncode or len(result.stdout)>65536:raise RootActionError('Netplan/cloud-init YAML must be bounded and unambiguous.','NETWORK_UNSUPPORTED')
         try:return json.loads(result.stdout)
         except (ValueError,TypeError):raise RootActionError('System YAML parser is unavailable.','NETWORK_UNSUPPORTED') from None
@@ -118,7 +164,7 @@ class NetworkManager:
             paths.extend('/etc/cloud/cloud.cfg.d/'+v.name for v in sorted(directory.iterdir()) if v.name.endswith('.cfg'))
         disabled=False
         for absolute in paths:
-            snapshot=self.runtime.snapshot(absolute);value=self._parse(absolute)
+            snapshot=self.runtime.snapshot(absolute);value=self._parse(absolute,cloud=True)
             dependencies[absolute]=snapshot
             if isinstance(value,dict) and isinstance(value.get('network'),dict) and 'config' in value['network']:
                 disabled=value['network']['config']=='disabled'

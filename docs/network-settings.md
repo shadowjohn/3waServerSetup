@@ -21,6 +21,14 @@ DHCP 模式下 IP／gateway 留空；三個 DNS 欄位全空時沿用 DHCP DNS�
 
 cloud-init 網路管理必須已停用，或主機已有可信的 `cloud-init.disabled`；仍由 cloud-init 管理或來源不明時，工具會停止並顯示原因。未知外部修改會保持待處理並停止覆寫。
 
+Ubuntu 安裝器產生的主機若仍啟用 cloud-init 網路重新產生，確認要自行管理這張網卡後，可由 root 新增 `/etc/cloud/cloud.cfg.d/99-disable-network-config.cfg`，內容如下。這只停用網路重新產生，保留 cloud-init 其他模組；不要覆蓋既有檔案。Network 的儲存／套用不會代替這項接管準備。
+
+```yaml
+network: {config: disabled}
+```
+
+cloud-init 檢查只解析網路相關設定，預設 logging 的 YAML alias 可以保留；網路設定中的 alias、重複鍵與 merge 仍會停止。Netplan 本身維持拒絕 alias 的限制。
+
 ## CLI
 
 以 root 使用工具；一般帳號只能查詢狀態。
