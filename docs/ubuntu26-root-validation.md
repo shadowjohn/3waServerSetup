@@ -1,5 +1,7 @@
 # Ubuntu 26.04 root 驗收
 
+2026-10-26 擴充：[官方 APT SpatiaLite 與 PDO／SQLite3 雙驅動驗收](spatialite-acceptance.md)已完成 CLI、FPM 四項各 30,000 筆，合計 120,000 筆。下方各日期保留當次歷史範圍；早期「SpatiaLite 未驗證」不代表此擴充結果。GDAL／PROJ 的 3827／3828 另見[比較記錄](twd67-validation.md)，目前未選定或套用新參數。
+
 2026-10-24 至 2026-10-25，在使用者授權的 Ubuntu 26.04 Hyper-V 測試 VM 執行。這是 `3waAI/root-install-apply` 未發布開發版，base commit `b37d776`；不代表 Ubuntu 22.04／24.04 或其他主機通過驗收。
 
 程式及專用 venv 部署到 root 控制的 `/opt/3waServerSetting`，來源包逐檔 SHA256 核對。原本兩份 john 唯讀測試目錄不作 root 程式來源；既有完整 Hyper-V 匯出備份保留，沒有宣稱已完成開機還原測試。

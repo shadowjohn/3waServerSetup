@@ -193,6 +193,46 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(custom['component_status'], 'external build')
         self.assertFalse(self.real_installs())
 
+    def test_spatialite_loadable_module_catalog_item_has_an_install_only_plan(self):
+        name = 'libsqlite3-mod-spatialite'
+        self.candidates[name] = '5.1.0-1'
+        groups = self.manager.catalog()
+        gis = next(group for group in groups if group['id'] == 'gis_cli')
+        matches = [item for item in gis['items'] if item['id'] == name]
+        self.assertEqual(len(matches), 1)
+        item = matches[0]
+        self.assertEqual(item['packages'], [name])
+        self.assertIn(name, gis['packages'])
+        self.assertIn('SpatiaLite loadable module', item['label'])
+        for component in ('mod_spatialite.so', 'PHP PDO/SQLite3', 'runtime support'):
+            self.assertIn(component, item['detail'])
+        self.assertFalse(item['installed'])
+        self.assertIsNone(item['current'])
+        self.assertEqual(item['candidate'], '5.1.0-1')
+        base = next(group for group in groups if group['id'] == 'base')
+        self.assertEqual(base['items'][0]['id'], 'ntpdate')
+        self.assertEqual(base['items'][0]['packages'], ['ntpsec-ntpdate'])
+
+        self.simulation = f'Inst {name} (5.1.0-1 Ubuntu:26.04 [amd64])\nConf {name} (5.1.0-1 Ubuntu:26.04 [amd64])\n'
+        preview = self.manager.plan(item['packages'])
+        self.assertEqual(preview['names'], [name])
+        self.assertEqual(preview['install_names'], [name])
+        self.assertEqual([(row['name'], row['candidate'], row['action']) for row in preview['changes']], [(name, '5.1.0-1', 'install')])
+        self.assertEqual((preview['download_bytes'], preview['disk_bytes']), (100, 2048))
+        self.assertIn('--no-upgrade', preview['command'])
+        self.assertIn('--no-remove', preview['command'])
+        self.assertFalse(self.real_installs())
+        self.assertFalse((self.root/'var/lib/3wa-server-setup').exists())
+
+    def test_spatialite_catalog_and_plan_keep_the_ubuntu26_write_gate(self):
+        for version in ('22.04', '24.04'):
+            (self.root/'etc/os-release').write_text('ID=ubuntu\nVERSION_ID="' + version + '"\n')
+            for operation in (self.manager.catalog, lambda: self.manager.plan(['libsqlite3-mod-spatialite'])):
+                with self.subTest(version=version, operation=operation), self.assertRaises(RootActionError) as error:
+                    operation()
+                self.assertEqual(error.exception.code, 'UNSUPPORTED_OS')
+        self.assertFalse(self.calls)
+
     def test_readonly_search_status_can_cover_all_fifty_results_without_expanding_install_limit(self):
         names = [row['name'] for row in self.manager.search('package')]
         self.assertEqual(len(self.manager.status(names)['items']), 50)

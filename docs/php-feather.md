@@ -18,3 +18,5 @@ Root 可分別勾選 CLI、FPM，先檢閱再執行編譯與啟用。未勾選�
 ```
 
 `Restore stock` 恢復第一次啟用前的官方 ini alias，之後多次編譯也保留這個 baseline。建置／啟用失敗與主動還原分別處理；開發套件、系統 builder 帳號與已驗證版本產物不因 ini 還原而移除。PHP 套件／ABI 更新後要重新編譯，不能直接沿用舊 `.so`。
+
+SpatiaLite 本身使用官方 APT 的 `libsqlite3-mod-spatialite`；羽山版仍只負責既有 PDO 的 SQL 載入能力。2026-10-26 已在 Ubuntu 26.04，以使用者提供的 PDO／SQLite3 兩種寫法完成 CLI／FPM 各三種幾何、各 10,000 筆驗收；官方 PDO 的原始 SQL 路線實測拒絕載入。模組 symlink、SQLite3 extension_dir 限制與結果見 [PHP SpatiaLite 驗收](spatialite-acceptance.md)。

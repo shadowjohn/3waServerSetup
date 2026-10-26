@@ -6,7 +6,7 @@ from pathlib import Path
 import platform
 import re
 
-DEVELOPMENT_VERSION = '2026.10.26.003-dev'
+DEVELOPMENT_VERSION = '2026.10.27.001-dev'
 RELEASE_TAG = re.compile(r'v([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{3})(?:-rc\.[1-9][0-9]*)?')
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
 

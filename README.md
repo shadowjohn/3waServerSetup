@@ -17,7 +17,8 @@ MariaDB 新增獨立的 [root 密碼與外連 On／Off](docs/mariadb-root-access
 - [尚未完成的功能與驗收](docs/remaining-work.md)
 - [Release 安裝與更新規格](docs/release-distribution.md)
 - [離線防火牆候選](docs/firewall-offline.md)：只支援IPv4 INPUT，無apply；不可直接導入iptables-restore。
-- [PDO SQLite／SQLite3 RTree／SpatiaLite CLI測試](tests/README.md)
+- [PDO SQLite／SQLite3 RTree／SpatiaLite CLI測試](docs/sqlite-smoke.md)、[SpatiaLite 雙驅動 30,000 筆驗收](docs/spatialite-acceptance.md)
+- [TWD67 3827／3828：現代 GDAL／PROJ 與既有配方比對](docs/twd67-validation.md)
 - [Apache敏感檔案候選](docs/apache-sensitive-files.md)：合成匹配測試已跑，Apache runtime尚未驗證。
 - [Apache banner／MapServer選配](docs/apache-optional-security.md)、[MariaDB操作設計](docs/mariadb-operations.md)、[版本更新設計](docs/version-update.md)
 
@@ -29,4 +30,4 @@ python3 -m unittest discover -s tests
 php -l tests/sqlite-smoke.php
 ```
 
-Root 與 VM 的驗收範圍見 [Ubuntu 26.04 root 驗收](docs/ubuntu26-root-validation.md)及 [Release 驗收](docs/release-validation.md)。先前本機 PHP8.3.36、SQLite3.54.1 及 SpatiaLite5.1.0 的 legacy-sql 四項測試曾通過；本輪羽山版使用自有 SQLite native probe 驗證，SpatiaLite 套件與實際應用另行驗收。Ubuntu 22.04／24.04 的程式安裝／更新與網路功能採獨立門檻，其他服務寫入仍只開放已驗證的 Ubuntu 26.04；PHP8.4 native 路線尚未驗收。Linux 部署根為 `/opt/3waServerSetting`；`nat.sh` 仍僅離線子工具，不會寫入 `/root/nat.sh`。
+Root 與 VM 的驗收範圍見 [Ubuntu 26.04 root 驗收](docs/ubuntu26-root-validation.md)及 [Release 驗收](docs/release-validation.md)。官方 APT SpatiaLite 與既有 PDO SQL／SQLite3 loader 已在 Ubuntu 26.04 完成 CLI、FPM 各 30,000 筆的雙驅動驗收；其他 GIS 函式及網站應用另行驗收。Ubuntu 22.04／24.04 的程式安裝／更新與網路功能採獨立門檻，其他服務寫入仍只開放已驗證的 Ubuntu 26.04；PHP8.4 native 路線尚未驗收。Linux 部署根為 `/opt/3waServerSetting`；`nat.sh` 仍僅離線子工具，不會寫入 `/root/nat.sh`。

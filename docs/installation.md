@@ -9,14 +9,14 @@
 ```sh
 cd /root
 curl --fail --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
-  https://github.com/shadowjohn/3waServerSetup/releases/download/v2026.10.26.003/install.sh \
+  https://github.com/shadowjohn/3waServerSetup/releases/download/v2026.10.27.001/install.sh \
   --output install-3wa.sh
 # 先檢閱安裝器，再執行：
-sh ./install-3wa.sh --release v2026.10.26.003
+sh ./install-3wa.sh --release v2026.10.27.001
 /opt/3waServerSetting/run.sh
 ```
 
-新主機直接使用 `v2026.10.26.003` 的 `install.sh`，支援 Ubuntu 22.04／24.04／26.04。指定其他版本時，下載該 tag 附件中的 `install.sh`，並將 `--release` 改為相同 tag。安裝器需要時會準備 Python 3、venv、OpenSSH client、curl 及 CA 憑證；業務服務的安裝仍由工具頁面檢閱操作。
+新主機直接使用 `v2026.10.27.001` 的 `install.sh`，支援 Ubuntu 22.04／24.04／26.04。指定其他版本時，下載該 tag 附件中的 `install.sh`，並將 `--release` 改為相同 tag。安裝器需要時會準備 Python 3、venv、OpenSSH client、curl 及 CA 憑證；業務服務的安裝仍由工具頁面檢閱操作。
 
 安裝器包含固定發布公鑰，先驗 manifest 的 SSH 簽章、安裝器自身及 archive／逐檔 hash，才執行包內程式。Python 依賴從隨包 wheelhouse 依鎖檔離線安裝，不使用系統 pip。首次執行安裝器仍需操作者確認下載來源；之後不會靜默更換信任公鑰。
 
@@ -30,15 +30,17 @@ Installer 接受 Ubuntu 22.04／24.04／26.04，使用發行版內建 Python 3.1
 /opt/3waServerSetting/run.sh --version
 /opt/3waServerSetting/run.sh --update-status
 /opt/3waServerSetting/run.sh --update-check
-/opt/3waServerSetting/run.sh --update-plan --release-tag v2026.10.26.003
-/opt/3waServerSetting/run.sh --update-apply --release-tag v2026.10.26.003 --confirm
+/opt/3waServerSetting/run.sh --update-plan --release-tag v2026.10.27.001
+/opt/3waServerSetting/run.sh --update-apply --release-tag v2026.10.27.001 --confirm
 ```
 
 一般啟動及 status 不連網。無網路、簽章／hash 不符、資料 schema 不相容或仍有主機設定交易時，不切換程式。進行中的舊版 console 不得跨版繼續修改主機，需重新開啟。
 
+`2026.10.26.003` 可直接更新到本版，不需增加橋接。新增的 [SpatiaLite 完整驗收](spatialite-acceptance.md)沿用原有 `tests/sqlite-smoke.php --acceptance` 入口；安裝／更新程式不會自行安裝 SpatiaLite、建立模組 symlink 或修改 PHP ini，主機配置與程式版本分開操作。GDAL 的 3827／3828 這版提供比較紀錄，尚未套用新參數。
+
 ### 舊版更新器的相容性
 
-`2026.10.25.001`、`2026.10.26.001` 的更新器只認得 Python `>=3.12` 與 Ubuntu 24／26 的 manifest。直接選取 latest `v2026.10.26.003` 會被拒絕，程式與主機設定保持原狀；更新器不會自動選擇橋接包。
+`2026.10.25.001`、`2026.10.26.001` 的更新器只認得 Python `>=3.12` 與 Ubuntu 24／26 的 manifest。直接選取 latest `v2026.10.27.001` 會被拒絕，程式與主機設定保持原狀；更新器不會自動選擇橋接包。
 
 舊版先以 root 指定橋接 `v2026.10.26.002`。該包來源為 `6601ef4cec1f4b3d7ef6050496c6528a3f094da2`，manifest 仍保留 Python `>=3.12` 與 Ubuntu 24／26，更新器已能辨識下一版的 metadata：
 
@@ -47,12 +49,12 @@ Installer 接受 Ubuntu 22.04／24.04／26.04，使用發行版內建 Python 3.1
 /opt/3waServerSetting/run.sh --update-apply --release-tag v2026.10.26.002 --confirm
 ```
 
-關閉舊版 console，重新啟動程式；用 `--version` 確認為 `2026.10.26.002` 後，再指定正式版 `v2026.10.26.003`：
+關閉舊版 console，重新啟動程式；用 `--version` 確認為 `2026.10.26.002` 後，再指定正式版 `v2026.10.27.001`：
 
 ```sh
 /opt/3waServerSetting/run.sh --version
-/opt/3waServerSetting/run.sh --update-plan --release-tag v2026.10.26.003
-/opt/3waServerSetting/run.sh --update-apply --release-tag v2026.10.26.003 --confirm
+/opt/3waServerSetting/run.sh --update-plan --release-tag v2026.10.27.001
+/opt/3waServerSetting/run.sh --update-apply --release-tag v2026.10.27.001 --confirm
 ```
 
 完成橋接後也可使用 Software update 的 latest 流程。各版本實測與公開發布驗證以 [Release 驗收](release-validation.md)及 [Ubuntu 22.04 驗收](ubuntu22-validation.md)為準。
