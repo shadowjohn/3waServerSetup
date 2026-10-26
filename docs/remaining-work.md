@@ -15,6 +15,7 @@
 | 已完成 | Network 正式版端到端流程 | Ubuntu 24.04 RC2 四階段原生驗收、Network TTY 寬窄畫面檢閱／取消、公開 `26.001` 五附件核對、公開 `25.001` 真正 TTY 更新及最終公開版固定 `.24` 新 SSH 確認均通過，見[Release 驗收](release-validation.md#20261026001) |
 | 已完成 | Ubuntu 26.04 正式 `26.001` 更新後核對 | 公開 `25.001` 更新、root／john CLI、完整簽章 payload／ready 及原 98 檔案／81 筆交易狀態、boot、Swap、LV、BanIP、防火牆、Startup、Feather 唯讀保護核對均通過；最終 remote_writes=0 |
 | 整合 | Ubuntu 26.04 額外 backend 網路來源 | `/run/systemd/network/zzzz-dracut-default.network` 觸發 Network 保守門檻；既有固定 `.26` 保留，未接管、刪除或套用。來源整合／遷移需獨立實作與驗證，本輪保留現況 |
-| 驗收 | 其他平台與壓力 | Ubuntu 24.04 的安裝／更新與網路功能獨立驗收，不代表其他服務管理已通過；22.04、多 PHP／pool、XFS／Btrfs、Swap 記憶體壓力未驗收 |
+| 已完成 | Ubuntu 22.04 原生候選 | 原生 Python 3.10 的簽章安裝／升版／CLI 回退、120 秒 Network 回復及最終固定 `.22` 新 SSH 確認均通過，見[Ubuntu 22.04 驗收](ubuntu22-validation.md)。本輪為本地簽章 RC，尚未公開新 Release；完整 461 項屬 RC1，RC3 cloud-init reader 修正另做差異驗證 |
+| 驗收 | 其他平台與壓力 | Ubuntu 22.04／24.04 的安裝／更新與網路功能已獨立驗收，其他服務寫入仍限 Ubuntu 26.04；多 PHP／pool、XFS／Btrfs、Swap 記憶體壓力未驗收 |
 
 VPN／PPP／NAT／FORWARD、磁碟分割區與 PV 成長不在目前受管範圍。使用者選擇測試後關閉服務防火牆，以及建議 Swap 值只載入表單而不自動套用，都不是未完成項目。
