@@ -124,13 +124,14 @@ class NetworkCliTests(unittest.TestCase):
             code,result,text=self.invoke(['--network-confirm','network-fixture','--confirm'],manager)
         self.assertEqual((code,result['code']),(1,'NEW_SSH_REQUIRED'));self.assertNotIn('PRIVATE_NETWORK_INTERNAL',text)
 
-    def test_platform_gate_supports_only_root_ubuntu24_and_26(self):
+    def test_platform_gate_supports_only_root_ubuntu22_24_and_26(self):
         from pathlib import Path
         import server_setting
-        for release,expected in (('24.04',True),('26.04',True),('22.04',False)):
-            with self.subTest(release=release), patch('server_setting.platform.system',return_value='Linux'), \
+        for system,release,expected in (('ubuntu','22.04',True),('ubuntu','24.04',True),
+                ('ubuntu','26.04',True),('ubuntu','20.04',False),('ubuntu','unknown',False),('debian','22.04',False)):
+            with self.subTest(system=system,release=release), patch('server_setting.platform.system',return_value='Linux'), \
                     patch('server_setting.os.geteuid',return_value=0,create=True), \
-                    patch.object(Path,'read_text',return_value='ID=ubuntu\nVERSION_ID="'+release+'"\n'):
+                    patch.object(Path,'read_text',return_value='ID='+system+'\nVERSION_ID="'+release+'"\n'):
                 self.assertEqual(server_setting.network_management_available(),expected)
         with patch('server_setting.platform.system',return_value='Linux'),patch('server_setting.os.geteuid',return_value=1000,create=True):
             self.assertFalse(server_setting.network_management_available())

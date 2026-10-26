@@ -10,6 +10,7 @@ import subprocess
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 
 
@@ -88,7 +89,7 @@ class ReleaseBuildTests(BuildFixture):
             self.assertEqual(len(data), manifest['files'][name]['size'])
         identity = json.loads(contents['RELEASE.json'])
         self.assertEqual(identity['data_schema'], 1)
-        self.assertEqual(identity['python_requires'], '>=3.12')
+        self.assertEqual(identity['python_requires'], '>=3.10')
         self.assertEqual(identity['validated_platforms'], ['ubuntu26.04'])
         installer = (self.output/'install.sh').read_bytes()
         self.assertNotIn(b'@ALLOWED_SIGNERS@', installer)
@@ -102,6 +103,7 @@ class ReleaseBuildTests(BuildFixture):
         self.wheel.write_bytes(original+b'tamper')
         with self.assertRaises(ValueError): self.build()
         self.wheel.write_bytes(original)
+
         extra = self.wheels/'unlocked-1-py3-none-any.whl'; extra.write_bytes(original)
         with self.assertRaises(ValueError): self.build()
         extra.unlink(); self.wheel.unlink()
@@ -110,6 +112,12 @@ class ReleaseBuildTests(BuildFixture):
         native = self.wheels/'fixture_pkg-1.2.3-cp312-cp312-linux_x86_64.whl'
         self.wheel.rename(native)
         with self.assertRaises(ValueError): self.build()
+
+    def test_ubuntu22_validation_uses_native_python310_metadata(self):
+        self.build(validated_platforms=['ubuntu22.04','ubuntu24.04','ubuntu26.04'])
+        manifest=json.loads((self.output/'release-manifest.json').read_text())
+        self.assertEqual(manifest['python_requires'],'>=3.10')
+        self.assertEqual(manifest['validated_platforms'],['ubuntu22.04','ubuntu24.04','ubuntu26.04'])
 
     def test_unsafe_version_commit_signers_or_source_symlink_refused(self):
         for value in ('v2026.2.25.001', 'main', 'v2026.10.25.001;reboot', '../v2026.10.25.001',
@@ -170,6 +178,22 @@ class BootstrapVerificationTests(BuildFixture):
         self.assertEqual(entry, destination/'3waServerSetting/server_setting/release_update.py')
         self.assertTrue(entry.is_file())
 
+    def test_signed_manifest_floor_is_checked_against_bootstrap_python(self):
+        path=self.output/'release-manifest.json'
+        original=json.loads(path.read_text())
+        for requirement,version,allowed in (('>=3.10',(3,10),True),('>=3.12',(3,10),False),
+                                            ('>=3.10',(3,12),True),('>=3.12',(3,12),True)):
+            value=dict(original,python_requires=requirement,
+                       validated_platforms=['ubuntu22.04','ubuntu24.04','ubuntu26.04'])
+            path.write_text(json.dumps(value),encoding='utf-8')
+            path.with_suffix('.json.sig').unlink()
+            subprocess.run([shutil.which('ssh-keygen'),'-Y','sign','-f',str(self.key),'-n','3wa-release@3wa.tw',str(path)],
+                           check=True,capture_output=True)
+            with self.subTest(requirement=requirement,version=version),patch.object(self.verify.sys,'version_info',version):
+                if allowed:self.assertEqual(self.verified()['python_requires'],requirement)
+                else:
+                    with self.assertRaisesRegex(ValueError,'Python 3.12'):self.verified()
+
     def test_bad_signature_manifest_installer_or_archive_prevents_extraction(self):
         path = self.output/'release-manifest.json'; original = path.read_bytes()
         path.write_bytes(original+b' ')
@@ -198,7 +222,8 @@ class BootstrapVerificationTests(BuildFixture):
     def test_authenticated_invalid_metadata_types_are_safely_refused(self):
         path = self.output/'release-manifest.json'
         original = json.loads(path.read_text())
-        for changes in ({'schema':True}, {'commit':[]}, {'validated_platforms':[{}]}, {'tag':True}):
+        for changes in ({'schema':True}, {'commit':[]}, {'validated_platforms':[{}]}, {'tag':True},
+                        {'python_requires':'>=3.9'},{'validated_platforms':['ubuntu20.04']}):
             value = dict(original, **changes)
             path.write_text(json.dumps(value),encoding='utf-8')
             (self.output/'release-manifest.json.sig').unlink()

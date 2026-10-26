@@ -659,7 +659,7 @@ class SettingApp(App):
         if self.root_busy or self.network_manager is None or operation not in {'status', 'current', 'saved', 'save', 'apply', 'recover'}:
             return
         if operation != 'status' and not self.network_root:
-            self._root_result('network', {'status':'DENIED', 'code':'ROOT_REQUIRED', 'message':'Network changes require root on Ubuntu 24.04 or 26.04.'})
+            self._root_result('network', {'status':'DENIED', 'code':'ROOT_REQUIRED', 'message':'Network changes require root on Ubuntu 22.04, 24.04 or 26.04.'})
             return
         if operation in {'save', 'apply'} and self._mutation_pending():
             return
@@ -751,7 +751,7 @@ class SettingApp(App):
             return
         if operation in {'apply', 'rollback'}:
             if not self.update_root:
-                self._root_result('update', {'status':'DENIED', 'code':'ROOT_REQUIRED', 'message':'Program switching requires root on Ubuntu 24.04 or 26.04.'})
+                self._root_result('update', {'status':'DENIED', 'code':'ROOT_REQUIRED', 'message':'Program switching requires root on Ubuntu 22.04, 24.04 or 26.04.'})
                 return
             if self._network_pending() or self.startup_state.get('pending') or (operation == 'apply' and self.release_state.get('pending')):
                 return

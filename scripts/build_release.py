@@ -133,11 +133,11 @@ def build_release(*, source, wheelhouse, output, version, commit, validated_plat
     if not isinstance(requested_platforms,(list,tuple)) or any(not isinstance(p,str) for p in requested_platforms):
         raise ValueError('Validated platforms must be an explicit list.')
     platforms = sorted(set(requested_platforms))
-    if not platforms or any(p not in {'ubuntu24.04', 'ubuntu26.04'} for p in platforms):
+    if not platforms or any(p not in {'ubuntu22.04', 'ubuntu24.04', 'ubuntu26.04'} for p in platforms):
         raise ValueError('Only actually validated Ubuntu platforms may be advertised.')
     key = signer_text(source)
     identity = {'schema':1, 'product':PRODUCT, 'repository':REPOSITORY, 'version':parsed_version,
-                'tag':version, 'commit':commit, 'data_schema':1, 'python_requires':'>=3.12',
+                'tag':version, 'commit':commit, 'data_schema':1, 'python_requires':'>=3.10',
                 'validated_platforms':platforms}
     fixed = ['README.md','LICENSE','run.sh','nat.sh','firewall_plan.py','requirements-tui.txt',
              'requirements-tui.lock','tests/sqlite-smoke.php','release/allowed_signers']
@@ -203,7 +203,7 @@ def main(argv=None):
     parser.add_argument('--output',type=Path,required=True)
     parser.add_argument('--version',required=True)
     parser.add_argument('--commit',required=True)
-    parser.add_argument('--validated-platform',dest='validated_platforms',action='append',choices=('ubuntu24.04','ubuntu26.04'))
+    parser.add_argument('--validated-platform',dest='validated_platforms',action='append',choices=('ubuntu22.04','ubuntu24.04','ubuntu26.04'))
     args = vars(parser.parse_args(argv))
     try:
         result = build_release(**args)

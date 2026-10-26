@@ -30,10 +30,10 @@ fi
 if [ -n "$from_dir" ]; then
     case "$from_dir" in /*) ;; *) printf '%s\n' 'Offline asset directory must be absolute.' >&2; exit 2;; esac
 fi
-[ -r /etc/os-release ] || { printf '%s\n' 'Ubuntu 24.04 or 26.04 is required.' >&2; exit 1; }
+[ -r /etc/os-release ] || { printf '%s\n' 'Ubuntu 22.04, 24.04 or 26.04 is required.' >&2; exit 1; }
 . /etc/os-release
-[ "${ID:-}" = ubuntu ] && { [ "${VERSION_ID:-}" = 24.04 ] || [ "${VERSION_ID:-}" = 26.04 ]; } || {
-    printf '%s\n' 'This installer supports Ubuntu 24.04 and 26.04 only.' >&2; exit 1;
+[ "${ID:-}" = ubuntu ] && { [ "${VERSION_ID:-}" = 22.04 ] || [ "${VERSION_ID:-}" = 24.04 ] || [ "${VERSION_ID:-}" = 26.04 ]; } || {
+    printf '%s\n' 'This installer supports Ubuntu 22.04, 24.04 and 26.04 only.' >&2; exit 1;
 }
 missing=
 command -v python3 >/dev/null 2>&1 || missing=1
@@ -41,7 +41,7 @@ command -v ssh-keygen >/dev/null 2>&1 || missing=1
 command -v curl >/dev/null 2>&1 || missing=1
 [ -r /etc/ssl/certs/ca-certificates.crt ] || missing=1
 if [ -z "$missing" ]; then
-    python3 -I -c 'import sys,venv,ensurepip,ssl; assert sys.version_info >= (3,12)' >/dev/null 2>&1 || missing=1
+    python3 -I -c 'import sys,venv,ensurepip,ssl; assert sys.version_info >= (3,10)' >/dev/null 2>&1 || missing=1
 fi
 if [ -n "$missing" ]; then
     printf '%s\n' 'Installing bootstrap prerequisites: python3, python3-venv, openssh-client, curl, ca-certificates.'
@@ -50,7 +50,7 @@ if [ -n "$missing" ]; then
         -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold \
         python3 python3-venv openssh-client curl ca-certificates
 fi
-python3 -I -c 'import sys,venv,ensurepip,ssl; assert sys.version_info >= (3,12)' || exit 1
+python3 -I -c 'import sys,venv,ensurepip,ssl; assert sys.version_info >= (3,10)' || exit 1
 [ -d /opt ] || install -d -m 755 /opt
 work=$(mktemp -d /opt/.3wa-bootstrap.XXXXXXXX)
 case "$work" in /opt/.3wa-bootstrap.*) ;; *) printf '%s\n' 'Unexpected bootstrap directory.' >&2; exit 1;; esac

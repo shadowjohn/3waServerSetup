@@ -21,7 +21,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        ubuntu: ['24.04', '26.04']
+        ubuntu: ['22.04', '24.04', '26.04']
     container: ubuntu:${{ matrix.ubuntu }}
     steps:
       - name: Prepare isolated test environment

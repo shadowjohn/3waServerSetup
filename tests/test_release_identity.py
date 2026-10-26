@@ -46,6 +46,19 @@ class ReleaseIdentityTests(unittest.TestCase):
             self.assertEqual(info['validated_platforms'], ['ubuntu26.04'])
             resolve.assert_not_called(); run.assert_not_called()
 
+    def test_ubuntu22_release_identity_and_independent_program_gate(self):
+        import server_setting
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory)
+            (root/'RELEASE.json').write_text(json.dumps({'version':'2026.10.26.002','commit':'a'*40,
+                'data_schema':1,'python_requires':'>=3.10','validated_platforms':['ubuntu22.04']}),encoding='utf-8')
+            self.assertEqual(server_setting.version_info(root)['channel'],'release')
+        for release,expected in (('22.04',True),('24.04',True),('26.04',True),('20.04',False)):
+            with self.subTest(release=release),patch('server_setting.platform.system',return_value='Linux'), \
+                    patch('server_setting.os.geteuid',return_value=0,create=True), \
+                    patch.object(Path,'read_text',return_value='ID=ubuntu\nVERSION_ID="'+release+'"\n'):
+                self.assertEqual(server_setting.update_management_available(),expected)
+
     def test_invalid_or_foreign_release_is_not_reported_as_verified_or_git_source(self):
         from server_setting import version_info
         good = {'version': '2026.10.25.001', 'commit': 'b'*40, 'data_schema': 1, 'validated_platforms': ['ubuntu26.04']}

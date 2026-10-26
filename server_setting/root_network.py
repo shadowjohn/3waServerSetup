@@ -88,8 +88,8 @@ class NetworkManager:
             raw=self.host.read('/usr/lib/os-release') or ''
         else:raw=self.host.read('/etc/os-release') or ''
         fields=dict(line.split('=',1) for line in raw.splitlines() if '=' in line)
-        if fields.get('ID','').strip('"')!='ubuntu' or fields.get('VERSION_ID','').strip('"') not in {'24.04','26.04'}:
-            raise RootActionError('Network changes support Ubuntu 24.04 and 26.04.','UNSUPPORTED_OS')
+        if fields.get('ID','').strip('"')!='ubuntu' or fields.get('VERSION_ID','').strip('"') not in {'22.04','24.04','26.04'}:
+            raise RootActionError('Network changes support Ubuntu 22.04, 24.04 and 26.04.','UNSUPPORTED_OS')
         from .release_update import ensure_current_release,ReleaseError
         try:ensure_current_release(_RUNNING_CODE_ROOT)
         except ReleaseError as error:raise RootActionError(str(error),error.code) from None

@@ -52,7 +52,7 @@ class ReleaseUpdateTests(unittest.TestCase):
         folder = self.base/('bundle-'+version); folder.mkdir()
         identity = {'schema':1,'product':'3waServerSetting','repository':'shadowjohn/3waServerSetup',
             'version':version,'tag':'v'+version,'commit':commit,'data_schema':1,
-            'python_requires':'>=3.12','validated_platforms':['ubuntu26.04']}
+            'python_requires':'>=3.10','validated_platforms':['ubuntu26.04']}
         identity.update(identity_changes or {})
         payload = {'run.sh':b'#!/bin/sh\nexit 0\n','server_setting/__init__.py':b"VERSION='0.1.0-dev'\n",
             'server_setting/__main__.py':b'pass\n','server_setting/root_actions.py':b'pass\n',
@@ -131,10 +131,10 @@ class ReleaseUpdateTests(unittest.TestCase):
                 self.assertEqual(error.exception.code,'BAD_MANIFEST')
         self.assertFalse(self.calls)
 
-    def test_bridge_keeps_runtime_python_and_os_gates(self):
-        for release,version,expected in (('24.04',(3,12),None),('26.04',(3,14),None),
-                                         ('22.04',(3,12),'UNSUPPORTED_OS'),
-                                         ('24.04',(3,10),'UNSUPPORTED_PYTHON')):
+    def test_native_python310_and_supported_os_gates(self):
+        for release,version,expected in (('22.04',(3,10),None),('24.04',(3,12),None),
+                                         ('26.04',(3,14),None),('20.04',(3,10),'UNSUPPORTED_OS'),
+                                         ('22.04',(3,9),'UNSUPPORTED_PYTHON')):
             with self.subTest(release=release,version=version), \
                     patch('server_setting.release_update.platform.system',return_value='Linux'), \
                     patch('server_setting.release_update.os.geteuid',return_value=0,create=True), \
@@ -148,15 +148,66 @@ class ReleaseUpdateTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name=='posix','Native atomic symlink transactions require POSIX')
     def test_bridge_installs_and_rolls_back_python310_release(self):
-        self.install(self.first)
-        original=os.readlink(self.root/'current')
-        second=self.bundle('2026.10.25.002','b'*40,identity_changes={
+        first=self.bundle('2026.10.25.002','b'*40,identity_changes={'python_requires':'>=3.12'})
+        second=self.bundle('2026.10.25.003','c'*40,identity_changes={
             'python_requires':'>=3.10','validated_platforms':['ubuntu22.04','ubuntu24.04','ubuntu26.04']})
-        self.assertEqual(self.install(second)['status'],'UPDATED')
-        self.assertEqual(self.manager.status()['installed']['validated_platforms'],
-                         ['ubuntu22.04','ubuntu24.04','ubuntu26.04'])
-        self.assertEqual(self.manager.rollback(self.manager.rollback_plan())['status'],'UPDATE_ROLLED_BACK')
-        self.assertEqual(os.readlink(self.root/'current'),original)
+        with patch('server_setting.release_update.sys.version_info',(3,12)):
+            self.install(first)
+            original=os.readlink(self.root/'current')
+            self.assertEqual(self.install(second)['status'],'UPDATED')
+            self.assertEqual(self.manager.status()['installed']['validated_platforms'],
+                             ['ubuntu22.04','ubuntu24.04','ubuntu26.04'])
+            self.assertEqual(self.manager.rollback(self.manager.rollback_plan())['status'],'UPDATE_ROLLED_BACK')
+            self.assertEqual(os.readlink(self.root/'current'),original)
+
+    def test_python310_refuses_signed_python312_install_before_writes(self):
+        bundle=self.bundle('2026.10.25.002','b'*40,identity_changes={'python_requires':'>=3.12'})
+        with patch('server_setting.release_update.sys.version_info',(3,10)):
+            with self.assertRaises(ReleaseError) as error:self.install(bundle)
+        self.assertEqual(error.exception.code,'UNSUPPORTED_PYTHON')
+        self.assertFalse(self.root.exists())
+        self.assertFalse(any('-m' in argv and 'venv' in argv for argv in self.calls))
+
+    def test_signed_update_preview_checks_actual_python_not_validation_platforms(self):
+        bundle=self.bundle('2026.10.25.002','b'*40,identity_changes={'python_requires':'>=3.12'})
+        tag=bundle['identity']['tag'];prefix='https://github.com/shadowjohn/3waServerSetup/releases/download/'+tag+'/'
+        manifest=json.loads(bundle['manifest'].read_text())
+        api={'tag_name':tag,'draft':False,'prerelease':False,'body':'Release notes','assets':[
+            {'name':name,'browser_download_url':prefix+name} for name in
+            ('release-manifest.json','release-manifest.json.sig',manifest['archive']['name'])]}
+        responses={'https://api.github.com/repos/shadowjohn/3waServerSetup/releases/latest':json.dumps(api).encode(),
+            'https://api.github.com/repos/shadowjohn/3waServerSetup/commits/'+tag:json.dumps({'sha':'b'*40}).encode(),
+            prefix+'release-manifest.json':bundle['manifest'].read_bytes(),
+            prefix+'release-manifest.json.sig':bundle['signature'].read_bytes()}
+        self.manager.fetcher=lambda url,limit:responses[url]
+        with patch.object(self.manager,'_signers',return_value=self.signers.read_bytes()), \
+                patch.object(self.manager,'status',return_value={'supported':True,'installed':None}), \
+                patch('server_setting.release_update.sys.version_info',(3,10)):
+            with self.assertRaises(ReleaseError) as error:self.manager.check()
+            self.assertEqual(error.exception.code,'UNSUPPORTED_PYTHON')
+        with patch.object(self.manager,'_signers',return_value=self.signers.read_bytes()), \
+                patch.object(self.manager,'status',return_value={'supported':True,'installed':None}), \
+                patch('server_setting.release_update.sys.version_info',(3,12)):
+            self.assertEqual(self.manager.check()['status'],'UPDATE_AVAILABLE')
+        self.assertFalse(self.root.exists())
+
+    def test_python310_refuses_python312_rollback_before_lock_or_mutation(self):
+        old=json.loads(self.first['manifest'].read_text());old['python_requires']='>=3.12'
+        new=dict(old,python_requires='>=3.10')
+        state={'schema':1,'current':'new','previous':'old','launcher_sha256':'1'*64}
+        with patch.object(self.manager,'_state',return_value=state), \
+                patch.object(self.manager,'_journal',return_value=None), \
+                patch.object(self.manager,'_current',return_value='new'), \
+                patch.object(self.manager,'_installed_manifest',side_effect=lambda name,verify=False:old if name=='old' else new):
+            with patch('server_setting.release_update.sys.version_info',(3,12)):
+                plan=self.manager.rollback_plan()
+            with patch('server_setting.release_update.sys.version_info',(3,10)):
+                for action in (self.manager.rollback_plan,lambda:self.manager.rollback(plan)):
+                    with self.subTest(action=action),patch.object(self.manager,'_lock') as lock:
+                        with self.assertRaises(ReleaseError) as error:action()
+                        self.assertEqual(error.exception.code,'UNSUPPORTED_PYTHON')
+                        lock.assert_not_called()
+        self.assertFalse(self.root.exists())
 
     def test_wrong_signature_namespace_is_rejected(self):
         alternate=self.first['manifest'].with_name('wrong-namespace.json')

@@ -6,7 +6,7 @@ from pathlib import Path
 import platform
 import re
 
-DEVELOPMENT_VERSION = '2026.10.26.001-dev'
+DEVELOPMENT_VERSION = '2026.10.26.003-dev'
 RELEASE_TAG = re.compile(r'v([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{3})(?:-rc\.[1-9][0-9]*)?')
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
@@ -39,7 +39,7 @@ def _release_identity(root=None):
                 or value.get('repository', 'shadowjohn/3waServerSetup') != 'shadowjohn/3waServerSetup'
                 or value.get('tag', 'v'+version) != 'v'+version
                 or not isinstance(value.get('validated_platforms', []), list)
-                or any(not isinstance(item, str) or not re.fullmatch(r'ubuntu(?:24|26)\.04', item)
+                or any(not isinstance(item, str) or not re.fullmatch(r'ubuntu(?:22|24|26)\.04', item)
                        for item in value.get('validated_platforms', []))):
             raise ValueError()
         return value
@@ -93,7 +93,7 @@ def update_management_available():
     try:
         values = dict(line.split('=', 1) for line in Path('/etc/os-release').read_text(encoding='utf-8').splitlines()
                       if '=' in line)
-        return values.get('ID', '').strip('"') == 'ubuntu' and values.get('VERSION_ID', '').strip('"') in {'24.04', '26.04'}
+        return values.get('ID', '').strip('"') == 'ubuntu' and values.get('VERSION_ID', '').strip('"') in {'22.04', '24.04', '26.04'}
     except (OSError, UnicodeError):
         return False
 
@@ -113,7 +113,7 @@ def release_public(value):
 
 
 def network_management_available():
-    """Netplan management supports root on Ubuntu 24.04 and 26.04 independently."""
+    """Netplan management supports root on Ubuntu 22.04, 24.04 and 26.04 independently."""
     return update_management_available()
 
 

@@ -1,6 +1,6 @@
 # 主網卡 DHCP／固定 IP
 
-Network 頁獨立管理 Ubuntu 24.04／26.04 的主 Ethernet 網卡。可選 DHCP 或固定 IPv4 CIDR、gateway 與最多三組 DNS。套用目前需從 SSH 進行，並用新連線確認；服務管理的 Ubuntu 26.04 寫入限制不因此放寬。
+Network 頁獨立管理 Ubuntu 22.04／24.04／26.04 的主 Ethernet 網卡。可選 DHCP 或固定 IPv4 CIDR、gateway 與最多三組 DNS。套用目前需從 SSH 進行，並用新連線確認；服務管理的 Ubuntu 26.04 寫入限制不因此放寬。
 
 DHCP 模式下 IP／gateway 留空；三個 DNS 欄位全空時沿用 DHCP DNS，填入手動 DNS 時停用 DHCPv4 提供的 DNS。固定模式可填 `192.168.137.24/24`；gateway 為選填，同網段才接受。未填 DNS 不會擅自加入公共 DNS。
 

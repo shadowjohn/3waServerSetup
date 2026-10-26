@@ -153,6 +153,15 @@ def validate_manifest(raw):
     return value
 
 
+def _require_python(manifest):
+    if manifest.get('legacy'):
+        return
+    minimum=(3,10) if manifest['python_requires']=='>=3.10' else (3,12)
+    if sys.version_info[:2]<minimum:
+        raise ReleaseError(f'Selected release requires Python {minimum[0]}.{minimum[1]} or newer.',
+                           'UNSUPPORTED_PYTHON')
+
+
 def ensure_current_release(code_root, allow_pending=False):
     """Call with a physical path captured at import, never a newly resolved alias."""
     code_root=Path(code_root)
@@ -217,10 +226,10 @@ class ReleaseManager:
             fields=dict(line.split('=',1) for line in Path('/etc/os-release').read_text().splitlines() if '=' in line)
         except OSError:
             fields={}
-        if fields.get('ID','').strip('"')!='ubuntu' or fields.get('VERSION_ID','').strip('"') not in {'24.04','26.04'}:
-            raise ReleaseError('Release installation supports Ubuntu 24.04 and 26.04 only.', 'UNSUPPORTED_OS')
-        if sys.version_info<(3,12):
-            raise ReleaseError('Release installation requires Python 3.12 or newer.', 'UNSUPPORTED_PYTHON')
+        if fields.get('ID','').strip('"')!='ubuntu' or fields.get('VERSION_ID','').strip('"') not in {'22.04','24.04','26.04'}:
+            raise ReleaseError('Release installation supports Ubuntu 22.04, 24.04 and 26.04 only.', 'UNSUPPORTED_OS')
+        if sys.version_info<(3,10):
+            raise ReleaseError('Release installation requires Python 3.10 or newer.', 'UNSUPPORTED_PYTHON')
 
     @staticmethod
     def _active_code(allow_pending=False):
@@ -453,6 +462,7 @@ class ReleaseManager:
         self._verify_signature(raw,signature,self._signers())
         manifest=validate_manifest(raw)
         if manifest['tag']!=selected:raise ReleaseError('Signed release tag disagrees with the selected release.', 'BAD_RELEASE')
+        _require_python(manifest)
         archive=manifest['archive']
         if by_name.get(archive['name'])!=base+archive['name']:raise ReleaseError('Release archive asset is missing.', 'BAD_RELEASE')
         commit=_json(self._fetch('https://api.github.com/repos/'+REPOSITORY+'/commits/'+selected,MAX_MANIFEST))
@@ -627,6 +637,7 @@ class ReleaseManager:
             'manifest_sha256':_digest(_encoded(manifest)),'smoke_verified':True}))
 
     def _prepare(self,raw,manifest,manifest_raw,signature):
+        _require_python(manifest)
         if not isinstance(raw,bytes) or len(raw)!=manifest['archive']['size'] or _digest(raw)!=manifest['archive']['sha256']:
             raise ReleaseError('Release archive integrity check failed.','BAD_ARCHIVE_HASH')
         name=manifest['version']+'-'+manifest['commit'][:12]
@@ -729,7 +740,7 @@ class ReleaseManager:
             if link.is_symlink():link.unlink();self._sync(self.root)
             elif link.exists():raise ReleaseError('Current pointer was externally replaced.','UNSAFE_PATH')
             return
-        self._installed_manifest(name,verify=True)
+        _require_python(self._installed_manifest(name,verify=True))
         temporary=self.root/('.current-'+uuid.uuid4().hex)
         temporary.symlink_to('releases/'+name,target_is_directory=True)
         try:os.replace(temporary,link);self._sync(self.root)
@@ -786,6 +797,7 @@ class ReleaseManager:
                 raise ReleaseError('Close the running legacy console before adopting or replacing it.','BUSY')
 
     def _activate(self,name,manifest):
+        _require_python(manifest)
         current=self._current();before=self._state();pending=self._journal()
         if pending and pending.get('status') not in TERMINAL:raise ReleaseError('Recover the incomplete program update first.','RECOVERY_REQUIRED')
         if current!=before['current']:
@@ -847,6 +859,7 @@ class ReleaseManager:
         self._gate();self._active_code(allow_pending=True)
         raw=self._read(Path(manifest));sig=self._read(Path(signature),65536);trusted=self._signers(signers)
         self._verify_signature(raw,sig,trusted);value=validate_manifest(raw)
+        _require_python(value)
         package=self._read(Path(archive),MAX_ARCHIVE)
         self._dir(self.root);self._dir(self.control)
         with self._lock():
@@ -884,7 +897,9 @@ class ReleaseManager:
             raise ReleaseError('The installed pointer changed outside the updater.','EXTERNAL_EDIT')
         target=journal['restore_current'] if recovery else state.get('previous')
         if target is None and not recovery:raise ReleaseError('No previous local program version is available.','NO_PREVIOUS_RELEASE')
-        identity=self._identity(self._installed_manifest(target,verify=True),target) if target else None
+        manifest=self._installed_manifest(target,verify=True) if target else None
+        if manifest:_require_python(manifest)
+        identity=self._identity(manifest,target) if manifest else None
         result={'schema':1,'operation':'rollback','current':self._identity(self._installed_manifest(current),current) if current else None,
                 'target':identity,'recovery':recovery,'before_current':current,'before_state':state,
                 'transaction_id':journal['transaction_id'] if recovery else None,
@@ -893,6 +908,7 @@ class ReleaseManager:
 
     def rollback(self,plan):
         self._gate();self._active_code(allow_pending=True);self._check_plan(plan,'rollback')
+        self.rollback_plan()
         with self._lock():
             self._active_code(allow_pending=True)
             current=self.rollback_plan()

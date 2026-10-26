@@ -20,7 +20,7 @@ sh ./install-3wa.sh
 
 安裝器包含固定發布公鑰，先驗 manifest 的 SSH 簽章、安裝器自身及 archive／逐檔 hash，才執行包內程式。Python 依賴從隨包 wheelhouse 依鎖檔離線安裝，不使用系統 pip。首次執行安裝器仍需操作者確認下載來源；之後不會靜默更換信任公鑰。
 
-Installer 接受 Ubuntu 24.04／26.04；已驗證範圍以 Release 的 `validated_platforms` 及[實測紀錄](ubuntu26-root-validation.md)為準。安裝／更新能力和服務管理分開，服務寫入目前仍只開放已驗證的 Ubuntu 26.04。
+Installer 接受 Ubuntu 22.04／24.04／26.04，使用發行版內建 Python 3.10 以上及獨立 venv；不替換系統 Python。已驗證範圍以 Release 的 `validated_platforms` 及[實測紀錄](release-validation.md)為準。安裝／更新能力和服務管理分開，服務寫入目前仍只開放已驗證的 Ubuntu 26.04。
 
 ## 取得更新
 
@@ -35,6 +35,12 @@ Installer 接受 Ubuntu 24.04／26.04；已驗證範圍以 Release 的 `validate
 ```
 
 一般啟動及 status 不連網。無網路、簽章／hash 不符、資料 schema 不相容或仍有主機設定交易時，不切換程式。進行中的舊版 console 不得跨版繼續修改主機，需重新開啟。
+
+### 舊版更新器的相容性
+
+`2026.10.25.001`、`2026.10.26.001` 的更新器只認得 Python `>=3.12` 與 Ubuntu 24／26 的 manifest。加入 Ubuntu 22／Python 3.10 的版本會被它們拒絕；這時程式與主機設定保持原狀。升級前先指定橋接版本更新並重開程式，再更新到支援 Ubuntu 22 的版本；各正式 tag 與已驗證路徑見 [Release 驗收](release-validation.md)。不能把直接檢查 latest 被拒絕，解讀為已完成橋接。
+
+新版仍能辨識舊 manifest，但 Python 3.10 主機會拒絕安裝或回退到宣告 `>=3.12` 的包。一般 status 可以唯讀顯示該版本，不會因此執行它。
 
 ## 回退與中斷
 

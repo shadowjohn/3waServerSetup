@@ -117,6 +117,21 @@ class NetworkTests(unittest.TestCase):
         with self.assertRaises(RootActionError) as error:self.manager.core._gate('time')
         self.assertEqual(error.exception.code,'UNSUPPORTED_OS')
 
+    def test_status_and_plan_on_ubuntu22_are_readonly_and_services_stay_blocked(self):
+        (self.root/'etc/os-release').write_text('ID=ubuntu\nVERSION_ID="22.04"\n')
+        original=self.source.read_bytes()
+        status=self.manager.status()
+        self.assertTrue(status['supported'],status['detail'])
+        self.assertEqual(status['config']['mode'],'dhcp')
+        plan=self.manager.plan(self.config)
+        self.assertEqual(plan['timeout_seconds'],120)
+        self.assertEqual(plan['source']['path'],'/etc/netplan/50-cloud-init.yaml')
+        self.assertEqual(self.source.read_bytes(),original)
+        self.assertFalse((self.root/'var').exists())
+        self.assertFalse((self.root/'run').exists())
+        with self.assertRaises(RootActionError) as error:self.manager.core._gate('time')
+        self.assertEqual(error.exception.code,'UNSUPPORTED_OS')
+
     def test_normalize_dns_rows_and_reject_bad_static(self):
         self.assertEqual(normalize(dict(self.config,dns=['192.168.137.1','','']))['dns'],['192.168.137.1'])
         for change in ({'address':'192.168.137.0/24'},{'gateway':'10.0.0.1'}, {'dns':['1.1.1.1']*4}, {'interface':'../eth0'}):

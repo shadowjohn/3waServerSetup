@@ -107,7 +107,8 @@ def verify_manifest(directory, installer, signers, requested_tag=None):
     parsed_version = release_version(value.get('tag'))
     if (value.get('version')!=parsed_version or type(value.get('schema')) is not int or value['schema']!=1
             or value.get('product')!=PRODUCT or value.get('repository')!=REPO
-            or type(value.get('data_schema')) is not int or value['data_schema']!=1 or value.get('python_requires')!='>=3.12'
+            or type(value.get('data_schema')) is not int or value['data_schema']!=1
+            or value.get('python_requires') not in ('>=3.12','>=3.10')
             or not matches(r'[0-9a-f]{40}',value.get('commit'))):
         raise ValueError('Release identity is invalid or incompatible.')
     if requested_tag and requested_tag != value['tag']:
@@ -116,7 +117,7 @@ def verify_manifest(directory, installer, signers, requested_tag=None):
         raise ValueError('The stable installer does not select a prerelease.')
     platforms = value.get('validated_platforms')
     if (not isinstance(platforms,list) or not platforms
-            or any(not isinstance(p,str) or p not in {'ubuntu24.04','ubuntu26.04'} for p in platforms)
+            or any(not isinstance(p,str) or p not in {'ubuntu22.04','ubuntu24.04','ubuntu26.04'} for p in platforms)
             or len(set(platforms))!=len(platforms)):
         raise ValueError('Unknown validated platform metadata.')
     expected_archive = PRODUCT+'-'+value['tag']+'.tar.gz'
@@ -141,6 +142,9 @@ def verify_manifest(directory, installer, signers, requested_tag=None):
         total += entry['size']
     if total>MAX_PAYLOAD or not {'RELEASE.json','run.sh','server_setting/release_update.py','release/allowed_signers','requirements-tui.lock'}<=set(files):
         raise ValueError('The release payload is incomplete or too large.')
+    minimum=(3,10) if value['python_requires']=='>=3.10' else (3,12)
+    if sys.version_info[:2]<minimum:
+        raise ValueError(f'Selected release requires Python {minimum[0]}.{minimum[1]} or newer.')
     return value
 
 

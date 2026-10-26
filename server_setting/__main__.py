@@ -460,7 +460,7 @@ def update_command(args, manager=None):
     if operation in {'apply', 'rollback'}:
         if not update_management_available():
             return json_response({'status':'DENIED', 'code':'ROOT_REQUIRED', 'module':'update',
-                                  'message':'Program updates require root on Ubuntu 24.04 or 26.04.'}, 1)
+                                  'message':'Program updates require root on Ubuntu 22.04, 24.04 or 26.04.'}, 1)
         if not args.confirm:
             return json_response({'status':'ERROR', 'code':'CONFIRMATION_REQUIRED', 'module':'update',
                                   'message':'Review the update plan, then use --confirm for a program switch.'}, 2)
@@ -492,7 +492,7 @@ def network_command(args, manager=None):
                      if (getattr(args, 'network_'+name) is not None if name in {'confirm', 'recover'} else getattr(args, 'network_'+name)))
     if operation != 'status' and not network_management_available():
         return json_response({'status':'DENIED', 'module':'network', 'code':'ROOT_REQUIRED',
-                              'message':'Network management requires root on Ubuntu 24.04 or 26.04.'}, 1)
+                              'message':'Network management requires root on Ubuntu 22.04, 24.04 or 26.04.'}, 1)
     if operation in {'save', 'apply', 'confirm', 'recover'} and not args.confirm:
         return json_response({'status':'ERROR', 'module':'network', 'code':'CONFIRMATION_REQUIRED',
                               'message':'Network mutations require --confirm. Confirm the target only from a new SSH connection.'}, 2)
