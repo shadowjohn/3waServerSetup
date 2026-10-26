@@ -71,3 +71,15 @@ Ubuntu 26.04 的本輪基線觀察到 BanIP 非持久 kernel set 缺失，status
 私有證據包括 `.root-dev/public-ubuntu22-v2026.10.26.002-5d5b3ed5c954/proof.json`、`public-ubuntu22-v2026.10.26.003-3b06a87777f1/proof.json`、`public-latest-download-46e1ddb4b646/proof.json`、`old001-rejects003-vm26.json` 與 `latest-api-diagnostic.json`。五次原生更新 receipt 為 `publish-vm24-update-20261026T062557Z-98bc88f80d5a.json`、`publish-vm24-update-20261026T063137Z-0caf7870f96b.json`、`publish-vm26-update-20261026T063137Z-b0a947b63831.json`、`publish-vm26-update-20261026T063504Z-bdd1d00df286.json`、`publish-vm22-update-20261026T063504Z-31b308718616.json`。
 
 最終純本機補核 receipt 為 `publish-vm22-check-20261026T064735Z-5fb090a1da43.json`、`publish-vm24-check-20261026T064735Z-914b762f2576.json`、`publish-vm26-check-20261026T064735Z-95ab0323fdd8.json`；上述私有證據均不納入發行包。
+
+## 2026.10.27.001：SpatiaLite 驗收入口與舊版直接更新
+
+正式 tag `v2026.10.27.001` 指向 `520b55d629b8427de74fcd82740f5a0c8025559f`，於 2026-10-27 00:33（Asia/Taipei）公開。main CI `40359399380` 與 Release `40359398839` 成功；Release 的 Ubuntu 22.04／24.04／26.04 各完成 485 項及 headless smoke。CI 現安裝 PHP CLI，新增入口／公式測試有真正執行；這與 `.26` 的原生 120,000 筆 CLI／FPM 驗收分別記錄，不互相替代。本機 Windows 全套另為 485 項、0 失敗、29 個平台條件略過。
+
+本版加入官方 `libsqlite3-mod-spatialite` 套件選項；完整驗收沿用 `tests/sqlite-smoke.php --acceptance`，原快速檢查保持原行為。新說明置於 `docs/sqlite-smoke.md`，standalone wrapper 留在 Git source，未新增舊 updater 不接受的測試路徑，也未放寬更新器的封包邊界。本地候選已用原 `002`、`003` manifest validator 直接接受；公開後再用真正 `003` 預覽新版本。主機 symlink／PHP ini 不由程式更新自動套用，GDAL 僅收錄比較結果，未安裝新轉換參數。
+
+五個正式附件已重新匿名下載，pinned SSH signature、SHA256SUMS、archive 與完整 Git source 路徑集合／逐檔 bytes、9 個 locked wheels、canonical RELEASE.json、由原 source 重建的 installer 均通過。公開 archive SHA256 為 `7047008213381988ddabd6949aeb5ffe9f2e4ff80a98f3c198bc8753a02ce702`；沒有私有 helper、key、venv 或主機備份入包。證據：ignored `.root-dev/public-ubuntu22-v2026.10.27.001-b0f3f8a7c766/proof.json`。
+
+`.26` 仍保留 `v2026.10.26.003`，root 與獨立 john SSH 皆確認原版本。舊版的預設 latest check 回傳 `UPDATE_AVAILABLE`，明確 tag 的 plan 指向 `27.001`、完整來源 commit 與已驗證簽章。227 個受保護物件、101 筆交易、boot／IP、FPM、兩份 SpatiaLite ini、symlink 與 Feather 等狀態前後一致；明確 VM 寫入 0，未呼叫 Apply，讓使用者自行測試升版。BanIP 保留原本 kernel set 缺失的 unsupported 狀態，未宣稱恢復。
+
+本輪只驗證 `.26` 的公開更新偵測／預覽，沒有把它記成實際升版，也沒有推定 `.22`／`.24` 已執行本版。私有證據：`.root-dev/release26-readonly-baseline-377ce40f6aa4.json`、`release26-readonly-check-447ac774542d.json`；SpatiaLite 新入口的真正四項驗收見 [PHP SpatiaLite](spatialite-acceptance.md#2026-10-27-發行入口相容驗收)。
