@@ -1,6 +1,6 @@
 # Ubuntu 22.04 原生候選驗收
 
-2026-10-26 在新 Ubuntu 22.04 VM 以原生 Python 3.10.12、systemd 249 與主網卡 `eth0` 驗證。初始 DHCP 為 `192.168.137.176/24`，gateway／DNS 為 `192.168.137.1`。本輪使用與正式發行相同受信金鑰簽署的私有 RC；尚未公開 Release、push 或改動 main。其他服務設定寫入仍維持 Ubuntu 26.04-only，未對既有 Ubuntu 24.04／26.04 執行設定寫入。
+2026-10-26 在新 Ubuntu 22.04 VM 以原生 Python 3.10.12、systemd 249 與主網卡 `eth0` 驗證。初始 DHCP 為 `192.168.137.176/24`，gateway／DNS 為 `192.168.137.1`。以下原生驗收在私有 RC 階段完成，使用與正式發行相同的受信簽章金鑰；當時尚未公開 Release、push 或改動 main。其他服務設定寫入仍維持 Ubuntu 26.04-only，此 RC 階段未對既有 Ubuntu 24.04／26.04 執行設定寫入。
 
 `v2026.10.26.003-rc.1` 固定於 `1e8bed861f1158783f75de38aeed91a6f378d79b`。真正簽章安裝、獨立版本 venv、九個鎖定 wheels 的離線安裝及 `pip check` 通過；包含 Textual 8.2.8 與支援 Python 3.10 的 platformdirs 4.12.4。該 commit 的完整原生測試共 461 項，耗時 829.282 秒，無 skip，另通過 headless startup／keyboard／resize smoke。
 
@@ -14,6 +14,6 @@ RC3 已完成真正 Network 基線及 120 秒到期回復：由 DHCP `.176` 暫�
 
 原始基線的 12 個檔案中，除受管 Netplan 的預期變更，其餘 11 個保持一致；cloud-init 網路專用停用 marker 的 SHA256 亦保持一致，未停用整個 cloud-init。Ubuntu 24.04／26.04 的新 root SSH、boot ID、受保護檔案 stamp、Network 狀態與公開 `26.001` 版本均吻合本輪基線。`.26` 額外 backend 來源仍受保守門檻阻擋，未接管既有固定 IP。
 
-本輪 `.22` boot ID 保持一致，尚未進行重新開機驗證。公開 GitHub 來源的更新發現、下載及公開附件驗收亦尚未進行；此處完成的是私有簽章候選與原生 VM 驗證。
+本輪 `.22` boot ID 保持一致，尚未進行重新開機驗證。接續發布目標為橋接 `v2026.10.26.002` 與正式 `v2026.10.26.003`；公開發布驗證待補，包含公開 GitHub 來源的更新發現、下載、附件與舊版指定橋接路徑。此處既有 PASS 證據屬私有簽章候選與原生 VM 驗證。
 
 原始私有證據保留於開發 `.root-dev/`：`ubuntu22-assets-v2026.10.26.003-rc.1-native.log`、`ubuntu22-update-native.json`、`ubuntu22-rc3-native.json`、`ubuntu22-network-bfec26102622/state.json` 與 `ubuntu22-final-fleet-check.json`，不納入發行包。

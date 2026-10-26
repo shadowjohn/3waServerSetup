@@ -145,6 +145,17 @@ jobs:
             'Network trials require a new physical SSH connection to the target IP within 120 seconds. Program rollback does not undo confirmed IP settings.' '' \
             'Download install.sh, review it, then run: sudo sh install.sh --release '"$RELEASE_TAG" '' \
             'The installer authenticates the pinned SSH release signature, verifies all payload hashes, and preserves host configuration and backups.' '' \
+            'Existing v2026.10.25.001 or v2026.10.26.001 installations must first select bridge v2026.10.26.002 explicitly. The bridge retains Python >=3.12 and Ubuntu 24.04/26.04 metadata.' '' \
+            '```sh' \
+            '/opt/3waServerSetting/run.sh --update-plan --release-tag v2026.10.26.002' \
+            '/opt/3waServerSetting/run.sh --update-apply --release-tag v2026.10.26.002 --confirm' \
+            '```' '' \
+            'Close old consoles and reopen the program after the bridge update. Then select '"$RELEASE_TAG"' or use the latest release flow:' '' \
+            '```sh' \
+            '/opt/3waServerSetting/run.sh --update-plan --release-tag '"$RELEASE_TAG" \
+            '/opt/3waServerSetting/run.sh --update-apply --release-tag '"$RELEASE_TAG"' --confirm' \
+            '```' '' \
+            'The older updaters reject Python 3.10 release metadata when selected directly; they do not bridge automatically. New Ubuntu 22.04, 24.04 and 26.04 hosts can install this release directly with its install.sh. Ubuntu 22.04 uses its native Python 3.10.' '' \
             'Updates and rollback change program versions only. Existing service settings, databases and disks are not reverted.' > "$RUNNER_TEMP/threewa-release-notes.md"
           flags=(--latest)
           if [[ "$RELEASE_TAG" == *-rc.* ]]; then flags=(--prerelease --latest=false); fi
