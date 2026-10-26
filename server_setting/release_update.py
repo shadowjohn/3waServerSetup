@@ -120,11 +120,13 @@ def validate_manifest(raw):
             or not isinstance(value['commit'],str) or not COMMIT.fullmatch(value['commit'])):
         raise ReleaseError('Release identity is invalid.', 'BAD_MANIFEST')
     _version(value['tag'])
-    if type(value['data_schema']) is not int or value['data_schema']!=1 or value['python_requires']!='>=3.12':
+    if (type(value['data_schema']) is not int or value['data_schema']!=1
+            or value['python_requires'] not in ('>=3.12','>=3.10')):
         raise ReleaseError('Release data or Python compatibility is unsupported.', 'INCOMPATIBLE_RELEASE')
     platforms=value['validated_platforms']
-    if (not isinstance(platforms,list) or len(platforms)!=len(set(platforms)) or
-            any(p not in {'ubuntu24.04','ubuntu26.04'} for p in platforms)):
+    if (not isinstance(platforms,list)
+            or any(not isinstance(p,str) or p not in {'ubuntu22.04','ubuntu24.04','ubuntu26.04'} for p in platforms)
+            or len(platforms)!=len(set(platforms))):
         raise ReleaseError('Unknown validated platform declaration.', 'BAD_MANIFEST')
     for kind,expected in [('archive',PRODUCT+'-'+value['tag']+'.tar.gz'),('installer','install.sh')]:
         asset=value[kind]

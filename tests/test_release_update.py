@@ -48,11 +48,12 @@ class ReleaseUpdateTests(unittest.TestCase):
         patch.object(self.manager,'_gate',return_value=None).start()
         self.first = self.bundle('2026.10.25.001', 'a'*40)
 
-    def bundle(self, version, commit, mutate=None):
+    def bundle(self, version, commit, mutate=None, *, identity_changes=None):
         folder = self.base/('bundle-'+version); folder.mkdir()
         identity = {'schema':1,'product':'3waServerSetting','repository':'shadowjohn/3waServerSetup',
             'version':version,'tag':'v'+version,'commit':commit,'data_schema':1,
             'python_requires':'>=3.12','validated_platforms':['ubuntu26.04']}
+        identity.update(identity_changes or {})
         payload = {'run.sh':b'#!/bin/sh\nexit 0\n','server_setting/__init__.py':b"VERSION='0.1.0-dev'\n",
             'server_setting/__main__.py':b'pass\n','server_setting/root_actions.py':b'pass\n',
             'server_setting/release_update.py':b'pass\n','firewall_plan.py':b'pass\n',
@@ -104,6 +105,58 @@ class ReleaseUpdateTests(unittest.TestCase):
         value['files']={name:entry for name,entry in value['files'].items() if not name.startswith('wheelhouse/')}
         with self.assertRaises(ReleaseError):validate_manifest(json.dumps(value).encode())
         self.assertFalse(self.calls)
+
+    def test_bridge_accepts_known_python_floors_and_platforms(self):
+        original=json.loads(self.first['manifest'].read_text())
+        for requirement in ('>=3.12','>=3.10'):
+            for platforms in (['ubuntu22.04'],['ubuntu24.04'],['ubuntu26.04'],
+                              ['ubuntu22.04','ubuntu24.04','ubuntu26.04']):
+                value=dict(original,python_requires=requirement,validated_platforms=platforms)
+                with self.subTest(requirement=requirement,platforms=platforms):
+                    self.assertEqual(validate_manifest(json.dumps(value).encode()),value)
+        self.assertFalse(self.calls)
+
+    def test_bridge_rejects_unknown_or_malformed_python_and_platform_metadata(self):
+        original=json.loads(self.first['manifest'].read_text())
+        for requirement in ('>=3.9','>=3.11','3.10','>=3.10,<4',None,True,[],{}):
+            value=dict(original,python_requires=requirement)
+            with self.subTest(requirement=requirement):
+                with self.assertRaises(ReleaseError) as error:validate_manifest(json.dumps(value).encode())
+                self.assertEqual(error.exception.code,'INCOMPATIBLE_RELEASE')
+        for platforms in ('ubuntu22.04',None,['ubuntu20.04'],['ubuntu22.04','ubuntu22.04'],
+                          ['ubuntu22.04','ubuntu99.04'],[{}],[['ubuntu22.04']],[22]):
+            value=dict(original,validated_platforms=platforms)
+            with self.subTest(platforms=platforms):
+                with self.assertRaises(ReleaseError) as error:validate_manifest(json.dumps(value).encode())
+                self.assertEqual(error.exception.code,'BAD_MANIFEST')
+        self.assertFalse(self.calls)
+
+    def test_bridge_keeps_runtime_python_and_os_gates(self):
+        for release,version,expected in (('24.04',(3,12),None),('26.04',(3,14),None),
+                                         ('22.04',(3,12),'UNSUPPORTED_OS'),
+                                         ('24.04',(3,10),'UNSUPPORTED_PYTHON')):
+            with self.subTest(release=release,version=version), \
+                    patch('server_setting.release_update.platform.system',return_value='Linux'), \
+                    patch('server_setting.release_update.os.geteuid',return_value=0,create=True), \
+                    patch('server_setting.release_update.sys.version_info',version), \
+                    patch.object(Path,'read_text',return_value='ID=ubuntu\nVERSION_ID="'+release+'"\n'):
+                if expected:
+                    with self.assertRaises(ReleaseError) as error:ReleaseManager._gate(self.manager)
+                    self.assertEqual(error.exception.code,expected)
+                else:
+                    ReleaseManager._gate(self.manager)
+
+    @unittest.skipUnless(os.name=='posix','Native atomic symlink transactions require POSIX')
+    def test_bridge_installs_and_rolls_back_python310_release(self):
+        self.install(self.first)
+        original=os.readlink(self.root/'current')
+        second=self.bundle('2026.10.25.002','b'*40,identity_changes={
+            'python_requires':'>=3.10','validated_platforms':['ubuntu22.04','ubuntu24.04','ubuntu26.04']})
+        self.assertEqual(self.install(second)['status'],'UPDATED')
+        self.assertEqual(self.manager.status()['installed']['validated_platforms'],
+                         ['ubuntu22.04','ubuntu24.04','ubuntu26.04'])
+        self.assertEqual(self.manager.rollback(self.manager.rollback_plan())['status'],'UPDATE_ROLLED_BACK')
+        self.assertEqual(os.readlink(self.root/'current'),original)
 
     def test_wrong_signature_namespace_is_rejected(self):
         alternate=self.first['manifest'].with_name('wrong-namespace.json')
