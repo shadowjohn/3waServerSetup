@@ -38,4 +38,36 @@ Ubuntu 26.04 已在約 50.179 秒內由公開 `25.001` 更新至 `26.001`，root
 
 該 Ubuntu 26.04 主機的 Network 唯讀檢查回報 supported=false，原因精確為 `Custom backend network files require separate integration.`：除 `10-netplan-eth0.network`（235 bytes）外，另有 `/run/systemd/network/zzzz-dracut-default.network`（131 bytes）。保守門檻因此停止，未自動接管、刪除或套用；既有 `192.168.137.26/24` 與主機設定保留。本輪完整 Network 原生寫入端到端驗收在 Ubuntu 24.04 完成，不把這台 Ubuntu 26.04 的額外 backend 現況列為已支援或已寫入；來源整合與遷移需獨立實作與驗證。
 
-已發布包的 validated_platforms 列出 Ubuntu 24.04／26.04。Ubuntu 24.04 的原生範圍限於程式安裝、更新與 Network；其他服務管理寫入仍只開放已驗證的 Ubuntu 26.04。這個平台標記沒有放寬各功能的獨立 gate，也沒有回寫既有 `25.001` tag 或附件。Ubuntu 22.04 仍延後，未新增安裝器或主機寫入支援。
+此 `26.001` 已發布包的 validated_platforms 列出 Ubuntu 24.04／26.04。Ubuntu 24.04 的原生範圍限於程式安裝、更新與 Network；其他服務管理寫入仍只開放已驗證的 Ubuntu 26.04。這個平台標記沒有放寬各功能的獨立 gate，也沒有回寫既有 `25.001` tag 或附件。此版尚未新增 Ubuntu 22.04 安裝器或主機寫入支援。
+
+## 2026.10.26.002／003
+
+橋接公開 tag [`v2026.10.26.002`](https://github.com/shadowjohn/3waServerSetup/releases/tag/v2026.10.26.002) 固定於 `6601ef4cec1f4b3d7ef6050496c6528a3f094da2`，manifest 保留 Python `>=3.12` 與 Ubuntu 24.04／26.04。Release `40278207651` 的 Ubuntu 24.04／26.04 各 454 項測試、headless smoke、建包及發布全部通過。
+
+正式公開 tag [`v2026.10.26.003`](https://github.com/shadowjohn/3waServerSetup/releases/tag/v2026.10.26.003) 固定於 `beacfde733345c36f2f13563068d5dbb25dfa0f5`，manifest 為 Python `>=3.10` 與 Ubuntu 22.04／24.04／26.04。main CI `40278552252` 及 Release `40279153410` 的三平台各 469 項測試與 headless smoke 全部通過，Release 的來源解析、建包及發布亦全部成功。其他服務管理寫入仍限 Ubuntu 26.04。
+
+兩版各五個公開附件均已匿名下載並通過完整核對：固定公鑰簽章、SHA256SUMS、archive 與逐檔 hash、完整 payload 路徑集合、canonical `RELEASE.json`、公開 tag 完整 commit、與該 commit 的 Git 原始位元組／九個鎖定 wheels 一致，以及由該來源重製的 installer。main 正常推送，未 force-push；既有 tag／附件未移動或覆寫。
+
+公開舊版 `26.001` 在 Ubuntu 26.04 真正執行唯讀 update-check 指定 `003`，實際得到 `INCOMPATIBLE_RELEASE`，未變更主機。這證實舊更新器需要先指定 `002` 橋接、結束舊 console 並重開，才能更新到 `003`；流程與指令見[安裝操作](installation.md#舊版更新器的相容性)，沒有自動橋接。
+
+三台共五次指定 tag 的公開更新均已通過真正產品 CLI Check／Plan／Apply，最終全部為公開 `26.003`／commit `beacfde733345c36f2f13563068d5dbb25dfa0f5`：
+
+| VM | 公開更新路徑 | 保護結果 |
+|---|---|---|
+| Ubuntu 22.04 `.22` | `003-rc.3 → 003` | 23 個關鍵物件、7 筆原交易保持一致，新增 1 筆 APPLIED release-update |
+| Ubuntu 24.04 `.24` | `001 → 002 → 003` | 23 個關鍵物件、15 筆原交易保持一致，新增 2 筆 APPLIED release-update |
+| Ubuntu 26.04 `.26` | `001 → 002 → 003` | 121 個關鍵物件含原 98 個保護路徑、89 筆本輪原交易保持一致，新增 2 筆 APPLIED release-update |
+
+每次升版後以新 root／john SSH 核對版本、完整 commit、實體版本 venv、完整簽章 payload／ready，以及公開 manifest、archive、installer 的 hash 承諾。這五次程式升版期間，三台的 boot、IP、路由、DNS、關鍵檔案 hash／mode／uid／gid、儲存草稿及受保護服務狀態均與各自本輪基線一致；原交易的 ID／status／kind／module 保持不變，新增交易全為已終結的 release-update。
+
+五次更新後另以新 root／john SSH 完成三台純本機補核，均為正式 `003`，完整簽章與本輪主機保護再次通過。這項補核涵蓋實體版本 venv、CLI version／update-status 及主機狀態，未重新送出 update-apply。
+
+指定 tag 更新完成後，三台預設 latest CLI 補驗因真正 GitHub 匿名 API 限流而未全數完成。Ubuntu 24.04 查詢回報 `DOWNLOAD_FAILED`；進一步診斷回應為 HTTP403、limit60／remaining0，該次回應列出的重設時間為 `1792999085`（2026-10-26 15:18:05，Asia/Taipei）。因此未取得完整的三台預設 latest `UP_TO_DATE` 證據，純本機補核也不代表通過這項 API 查詢。
+
+官方 `/latest/download/` 路徑已另行匿名下載 `install.sh`、manifest 與簽章，三檔 hash 全部等同已驗證的公開 `003` 附件。公開發行、latest 下載路徑、完整附件驗證與五次實際升版均已完成；限流後的預設 CLI latest 查詢仍待補驗。
+
+Ubuntu 26.04 的本輪基線觀察到 BanIP 非持久 kernel set 缺失，status 為 unsupported、pending 為空；後續保護此既有狀態，沒有恢復 blacklist 或宣稱 active。原 98 個保護路徑取自既有紀錄，但以本輪即時 stamp／boot 建立新基線，沒有拿先前驗收的 boot ID 當成本輪前置條件。
+
+私有證據包括 `.root-dev/public-ubuntu22-v2026.10.26.002-5d5b3ed5c954/proof.json`、`public-ubuntu22-v2026.10.26.003-3b06a87777f1/proof.json`、`public-latest-download-46e1ddb4b646/proof.json`、`old001-rejects003-vm26.json` 與 `latest-api-diagnostic.json`。五次原生更新 receipt 為 `publish-vm24-update-20261026T062557Z-98bc88f80d5a.json`、`publish-vm24-update-20261026T063137Z-0caf7870f96b.json`、`publish-vm26-update-20261026T063137Z-b0a947b63831.json`、`publish-vm26-update-20261026T063504Z-bdd1d00df286.json`、`publish-vm22-update-20261026T063504Z-31b308718616.json`。
+
+最終純本機補核 receipt 為 `publish-vm22-check-20261026T064735Z-5fb090a1da43.json`、`publish-vm24-check-20261026T064735Z-914b762f2576.json`、`publish-vm26-check-20261026T064735Z-95ab0323fdd8.json`；上述私有證據均不納入發行包。

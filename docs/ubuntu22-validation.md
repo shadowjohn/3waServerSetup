@@ -14,6 +14,12 @@ RC3 已完成真正 Network 基線及 120 秒到期回復：由 DHCP `.176` 暫�
 
 原始基線的 12 個檔案中，除受管 Netplan 的預期變更，其餘 11 個保持一致；cloud-init 網路專用停用 marker 的 SHA256 亦保持一致，未停用整個 cloud-init。Ubuntu 24.04／26.04 的新 root SSH、boot ID、受保護檔案 stamp、Network 狀態與公開 `26.001` 版本均吻合本輪基線。`.26` 額外 backend 來源仍受保守門檻阻擋，未接管既有固定 IP。
 
-本輪 `.22` boot ID 保持一致，尚未進行重新開機驗證。接續發布目標為橋接 `v2026.10.26.002` 與正式 `v2026.10.26.003`；公開發布驗證待補，包含公開 GitHub 來源的更新發現、下載、附件與舊版指定橋接路徑。此處既有 PASS 證據屬私有簽章候選與原生 VM 驗證。
+RC 階段 `.22` boot ID 保持一致，尚未進行重新開機驗證。
 
-原始私有證據保留於開發 `.root-dev/`：`ubuntu22-assets-v2026.10.26.003-rc.1-native.log`、`ubuntu22-update-native.json`、`ubuntu22-rc3-native.json`、`ubuntu22-network-bfec26102622/state.json` 與 `ubuntu22-final-fleet-check.json`，不納入發行包。
+橋接 `v2026.10.26.002` 與正式 `v2026.10.26.003` 已公開發布。正式 `003` 固定於 `beacfde733345c36f2f13563068d5dbb25dfa0f5`；main CI `40278552252` 與 Release `40279153410` 的 Ubuntu 22.04／24.04／26.04 各 469 項測試及 headless smoke 通過。兩版各五個公開附件均已匿名核對固定簽章、完整 payload／canonical identity、Git 原始位元組及九個鎖定 wheels；詳見 [Release 驗收](release-validation.md)。這些 CI／公開資產證據與前述 RC1 原生 461 項、RC3 差異驗證分開記錄。
+
+Ubuntu 22.04 已經真正產品 CLI 指定 tag 的 Check／Plan／Apply，由 `003-rc.3` 更新至公開 `003`／完整 commit `beacfde733345c36f2f13563068d5dbb25dfa0f5`。新 root／john SSH、實體版本 venv、完整簽章 payload／ready 與公開 manifest／archive／installer 承諾核對通過。23 個關鍵物件及 7 筆原交易、boot、固定 `.22`、路由與 DNS 保持一致，只新增一筆 APPLIED release-update。Ubuntu 24.04／26.04 的公開 `001 → 002 → 003` 四次更新亦全部通過，詳見 [Release 驗收](release-validation.md)。
+
+最終另由新 root／john SSH 完成純本機版本、完整簽章及主機保護補核，`.22` 為正式 `003`。官方 `/latest/download/` 的 installer、manifest 與簽章亦已匿名下載，hash 全部等同已驗公開 `003`。預設 latest CLI 查詢當次遇到 GitHub 匿名 API 額度耗盡（HTTP403、remaining0），未取得三台預設 `UP_TO_DATE` 結果；純本機補核與 latest 下載成功均不列為該 API 查詢通過的證據。
+
+原始私有證據保留於開發 `.root-dev/`：`ubuntu22-assets-v2026.10.26.003-rc.1-native.log`、`ubuntu22-update-native.json`、`ubuntu22-rc3-native.json`、`ubuntu22-network-bfec26102622/state.json`、`ubuntu22-final-fleet-check.json`、`publish-vm22-update-20261026T063504Z-31b308718616.json` 與 `publish-vm22-check-20261026T064735Z-5fb090a1da43.json`，不納入發行包。
