@@ -63,6 +63,18 @@ class FeatherBuildTests(unittest.TestCase):
         self.host = FakeHost(self.root)
         self.builder = FeatherBuilder(self.host)
         self.addCleanup(patch.stopall)
+        import server_setting.php_feather_build as build_module
+        worker_bytes = Path(build_module.__file__).resolve().read_bytes()
+        worker = self.root / 'opt/fixture-code/server_setting/php_feather_build.py'
+        worker.parent.mkdir(parents=True)
+        worker.write_bytes(worker_bytes)
+        worker.chmod(0o644)
+        for parent in [worker.parent, *worker.parent.parents]:
+            parent.chmod(0o755)
+            if parent == self.root:
+                break
+        patch.object(build_module, 'WORKER_FILE', worker).start()
+        patch.object(build_module, '_WORKER_SOURCE_SHA256', hashlib.sha256(worker_bytes).hexdigest()).start()
         patch('server_setting.root_actions.os.geteuid', return_value=0, create=True).start()
         @contextmanager
         def unlocked():
@@ -178,6 +190,70 @@ class FeatherBuildTests(unittest.TestCase):
             self.assertIn(value, ' '.join(command))
         self.assertNotIn('runuser', command)
         self.assertNotIn('make install', ' '.join(command))
+
+    def test_build_worker_uses_import_frozen_physical_source_instead_of_legacy_layout(self):
+        import server_setting.php_feather_build as build_module
+        expected = str(build_module.WORKER_FILE)
+        workspace = '/var/tmp/threewa-feather-abcdef'
+        with patch.object(build_module, '__file__', '/opt/current/server_setting/php_feather_build.py'):
+            command = unit_command(workspace, workspace + '/job.json', 'abcdef123456')
+        self.assertEqual(command[-3:], [expected, '--worker', workspace + '/job.json'])
+
+    def test_frozen_worker_path_keeps_spaces_unicode_and_literal_dollars_as_one_argument(self):
+        import server_setting.php_feather_build as build_module
+        physical = self.root / '程式 空白 $literal' / 'server_setting' / 'php_feather_build.py'
+        workspace = '/var/tmp/threewa-feather-abcdef'
+        with patch.object(build_module, 'WORKER_FILE', physical):
+            command = unit_command(workspace, workspace + '/job.json', 'abcdef123456')
+        self.assertEqual(command[-3], str(physical))
+        self.assertIn('--expand-environment=no', command)
+
+    def test_worker_source_changes_are_refused_before_source_fetch(self):
+        import server_setting.php_feather_build as build_module
+        worker = self.root / 'worker.py'
+        worker.write_bytes(b'changed source bytes')
+        with patch.object(build_module, 'WORKER_FILE', worker, create=True), \
+             patch.object(build_module, '_WORKER_SOURCE_SHA256', hashlib.sha256(b'original').hexdigest(), create=True):
+            with self.assertRaises(RootActionError):
+                self.builder.plan()
+        self.assertFalse((self.root / 'var/lib/3wa-server-setup').exists())
+
+    def test_worker_source_and_parent_use_existing_root_path_trust_gate(self):
+        with patch.object(self.builder.core, '_trusted_target', side_effect=RootActionError('unsafe test source parent')) as trusted:
+            with self.assertRaises(RootActionError):
+                self.builder.plan()
+        trusted.assert_called()
+
+    def test_worker_in_protecthome_or_private_tmp_paths_is_refused_before_fetch(self):
+        import server_setting.php_feather_build as build_module
+        source = build_module.WORKER_FILE.read_bytes()
+        for prefix in ('root', 'home/admin', 'run/user/1000', 'tmp', 'var/tmp'):
+            worker = self.root / prefix / 'source/php_feather_build.py'
+            worker.parent.mkdir(parents=True, exist_ok=True)
+            worker.write_bytes(source)
+            with self.subTest(prefix=prefix), patch.object(build_module, 'WORKER_FILE', worker):
+                with self.assertRaises(RootActionError) as failure:
+                    self.builder.plan()
+                self.assertIn('/opt', str(failure.exception))
+        self.assertFalse((self.root / 'var/lib/3wa-server-setup').exists())
+
+    def test_worker_private_file_or_untraversable_parent_is_refused_before_fetch(self):
+        import server_setting.php_feather_build as build_module
+        worker = build_module.WORKER_FILE
+        original = Path.lstat
+        for target, mode in ((worker, 0o600), (worker.parent, 0o700)):
+            def metadata(path, *args, **kwargs):
+                info = original(path, *args, **kwargs)
+                if path == target:
+                    fields = list(info)
+                    fields[0] = (info.st_mode & ~0o777) | mode
+                    return os.stat_result(fields)
+                return info
+            with self.subTest(target=target), patch.object(Path, 'lstat', metadata):
+                with self.assertRaises(RootActionError) as failure:
+                    self.builder.plan()
+                self.assertIn('/opt', str(failure.exception))
+        self.assertFalse((self.root / 'var/lib/3wa-server-setup').exists())
 
     def test_artifact_validator_reads_real_files_and_detects_tampering(self):
         directory = self.host.path(MODULES + '/' + 'b' * 64)

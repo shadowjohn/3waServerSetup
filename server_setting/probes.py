@@ -7,9 +7,9 @@ import re
 import subprocess
 from .trusted_commands import resolve, environment
 
-MODULES = ('apache', 'php', 'vsftpd', 'samba', 'mariadb', 'time', 'startup', 'storage', 'firewall', 'sqlite')
+MODULES = ('apache', 'php', 'vsftpd', 'samba', 'mariadb', 'ssh', 'time', 'startup', 'storage', 'firewall', 'sqlite')
 SERVICES = {'apache': 'apache2.service', 'vsftpd': 'vsftpd.service',
-            'samba': 'smbd.service', 'mariadb': 'mariadb.service'}
+            'samba': 'smbd.service', 'mariadb': 'mariadb.service', 'ssh': 'ssh.service'}
 
 
 def parse_values(text, allowed):

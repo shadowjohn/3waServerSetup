@@ -11,6 +11,7 @@ import subprocess
 
 from .root_actions import Host, RootManager, RootActionError, _fingerprint
 from . import root_apt
+from .operation_progress import phase_context, run_captured
 
 
 NAME = re.compile(r'[a-z0-9][a-z0-9+.-]{0,127}')
@@ -56,9 +57,11 @@ class PackageHost(Host):
             if executable is None:
                 raise RootActionError('A trusted apt-cache command is unavailable.', 'MISSING_COMMAND')
             try:
-                return subprocess.run([executable, *argv[1:]], stdin=subprocess.DEVNULL,
-                    capture_output=True, text=True, errors='replace', timeout=timeout, shell=False, check=False,
+                result = run_captured([executable, *argv[1:]], timeout=timeout, command='apt-cache',
                     env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': '/root', 'LANG': 'C', 'LC_ALL': 'C'})
+                if result.output_truncated:
+                    raise RootActionError('APT package metadata exceeded the bounded capture.', 'PACKAGES_METADATA')
+                return result
             except subprocess.TimeoutExpired:
                 raise RootActionError('Package metadata request timed out.', 'TIMEOUT') from None
             except OSError:
@@ -76,7 +79,8 @@ class PackageManager:
 
     def _checked(self, argv, timeout=30, missing_ok=False):
         result = self.host.run(argv, timeout=timeout)
-        if len(result.stdout) > 8 * 1024 * 1024 or (result.returncode and not missing_ok):
+        if (getattr(result, 'output_truncated', False) or len(result.stdout) > 8 * 1024 * 1024
+                or (result.returncode and not missing_ok)):
             raise RootActionError('APT package metadata or simulation failed; native diagnostic output was discarded.', 'PACKAGES_NOT_READY')
         return result.stdout
 
@@ -151,7 +155,8 @@ class PackageManager:
                   group('base', 'Base tools', ['ntpsec-ntpdate', 'vim', 'make', 'screen', 'wget', 'ipset', 'iptables', 'curl', 'net-tools', 'tree', 'git', 'rsync', 'zip', 'unzip', 'htop', 'ncdu', 'lsof', 'bind9-dnsutils', 'tcpdump', 'jq', 'ca-certificates', 'bash-completion'], 'ntpsec-ntpdate is the Ubuntu 26.04 replacement package; installation does not run a time correction.')]
         groups[0]['items'].append(item('libsqlite3-mod-spatialite', 'libsqlite3-mod-spatialite (SpatiaLite loadable module)',
                                       'SQLite loadable mod_spatialite.so for PHP PDO/SQLite3; PHP loading requires enabled runtime support and separate verification.'))
-        groups[-1]['items'][0].update(id='ntpdate', label='ntpdate', provided_by='ntpsec-ntpdate', component_status='provided')
+        groups[-1]['items'][0].update(id='ntpdate', label='ntpdate (ntpsec-ntpdate)', provided_by='ntpsec-ntpdate', component_status='provided',
+                                     detail='Installs the ntpdate command from ntpsec-ntpdate; no clock correction is run.')
         meta = self._metadata(['php-fpm'])
         targets = {match for row in meta for match in re.findall(r'\b(php[0-9]+\.[0-9]+)-fpm\b', row.get('Depends', ''))}
         php = next(iter(targets)) if len(targets) == 1 else None
@@ -273,7 +278,8 @@ class PackageManager:
                        'fingerprint': trusted['fingerprint']}
             self.core._journal(journal)
             try:
-                result = self.host.run(trusted['command'], timeout=900)
+                with phase_context('package-install'):
+                    result = self.host.run(trusted['command'], timeout=900)
                 if result.returncode:
                     raise RootActionError('APT did not complete.', 'PACKAGES_FAILED')
                 names = [row['name'] for row in trusted['changes']]

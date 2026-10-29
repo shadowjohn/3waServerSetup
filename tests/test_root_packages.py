@@ -212,6 +212,8 @@ class PackageTests(unittest.TestCase):
         base = next(group for group in groups if group['id'] == 'base')
         self.assertEqual(base['items'][0]['id'], 'ntpdate')
         self.assertEqual(base['items'][0]['packages'], ['ntpsec-ntpdate'])
+        self.assertEqual(base['items'][0]['label'], 'ntpdate (ntpsec-ntpdate)')
+        self.assertIn('no clock correction', base['items'][0]['detail'])
 
         self.simulation = f'Inst {name} (5.1.0-1 Ubuntu:26.04 [amd64])\nConf {name} (5.1.0-1 Ubuntu:26.04 [amd64])\n'
         preview = self.manager.plan(item['packages'])

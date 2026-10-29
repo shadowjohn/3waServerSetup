@@ -19,6 +19,7 @@ import time
 import uuid
 
 from .model import FIELDS, preview
+from .operation_progress import phase_context, run_captured
 
 try:
     import fcntl as _fcntl
@@ -33,7 +34,9 @@ LOGS = '/var/lib/3wa-server-setup/logs'
 _POSIX_PERMISSIONS = os.name == 'posix'
 _RUNNING_CODE_ROOT = Path(__file__).resolve().parents[1]
 TRUSTED_PATH = '/usr/sbin:/usr/bin:/sbin:/bin'
-COMMANDS = {'nft', 'iptables', 'ip6tables', 'iptables-save', 'ipset', 'dpkg-query', 'systemctl', 'apache2ctl', 'a2enconf', 'a2disconf',
+_LEGACY_FTP_FIELDS = frozenset({'anonymous_enable', 'local_enable', 'write_enable',
+                                'pasv_min_port', 'pasv_max_port'})
+COMMANDS = {'nft', 'iptables', 'ip6tables', 'iptables-save', 'ipset', 'dpkg-query', 'systemctl', 'sshd', 'apache2ctl', 'a2enconf', 'a2disconf',
             'a2enmod', 'testparm', 'mariadbd', 'mariadb', 'timedatectl', 'apt-get'}
 
 # Recovery and ordinary operations share one terminal-state registry. A new
@@ -45,7 +48,8 @@ FINAL_STATUSES = frozenset({'APPLIED', 'RESTORED', 'ROLLED_BACK', 'INSTALLED', '
     'BANIP_CONFIRMED', 'BANIP_ROLLED_BACK', 'BANIP_FAILED', 'PACKAGES_INSTALLED', 'PACKAGES_FAILED',
     'FEATHER_APPLIED', 'FEATHER_ROLLED_BACK', 'FEATHER_FAILED',
     'STARTUP_APPLIED', 'STARTUP_RESTORED', 'STARTUP_ROLLED_BACK',
-    'STARTUP_RUN_SUCCEEDED', 'STARTUP_RUN_FAILED'})
+    'STARTUP_RUN_SUCCEEDED', 'STARTUP_RUN_FAILED',
+    'APACHE_FPM_APPLIED', 'APACHE_FPM_RESTORED', 'APACHE_FPM_ROLLED_BACK'})
 
 
 class RootActionError(RuntimeError):
@@ -104,7 +108,7 @@ class Host:
                 or any(not isinstance(arg, str) or '\x00' in arg for arg in argv)):
             raise RootActionError('Commands must be an argv list.', 'UNSAFE_COMMAND')
         name = Path(argv[0]).name
-        if name not in COMMANDS and not re.fullmatch(r'php-fpm[0-9]+\.[0-9]+', name):
+        if name not in COMMANDS and not re.fullmatch(r'php(?:-fpm)?[0-9]+\.[0-9]+', name):
             raise RootActionError('Command is outside the trusted allowlist.', 'UNSAFE_COMMAND')
         if '/' in argv[0] or '\\' in argv[0]:
             if argv[0] not in [directory + '/' + name for directory in TRUSTED_PATH.split(':')]:
@@ -124,9 +128,10 @@ class Host:
         env = {'PATH': TRUSTED_PATH, 'LC_ALL': 'C', 'LANG': 'C',
                'DEBIAN_FRONTEND': 'noninteractive', 'NEEDRESTART_MODE': 'l', 'HOME': '/root'}
         try:
-            return subprocess.run([executable, *argv[1:]], stdin=subprocess.DEVNULL,
-                                  capture_output=True, text=True, errors='replace',
-                                  timeout=timeout, check=False, shell=False, env=env)
+            result = run_captured([executable, *argv[1:]], timeout=timeout, command=name, env=env)
+            if result.output_truncated and (name != 'apt-get' or '--simulate' in argv):
+                raise RootActionError('Native command metadata exceeded the bounded capture.', 'OUTPUT_LIMIT')
+            return result
         except subprocess.TimeoutExpired:
             raise RootActionError(f'{name}: timed out.', 'TIMEOUT') from None
         except OSError:
@@ -301,6 +306,9 @@ class RootManager:
     def _values(self, module, values):
         self._module(module)
         values = self.recommended(module) if values is None else values
+        if module == 'vsftpd' and isinstance(values, dict) and set(values) == _LEGACY_FTP_FIELDS:
+            # 舊配方只補新欄位；任意其他不完整形狀仍走嚴格檢查。
+            values = {**FIELDS[module], **values}
         if not isinstance(values, dict) or set(values) != set(FIELDS[module]):
             raise RootActionError('A complete, known set of recipe fields is required.', 'INVALID_VALUES')
         try:
@@ -310,6 +318,9 @@ class RootManager:
         return dict(values)
 
     def load_saved(self, module):
+        return self._load_saved(module, normalize=True)
+
+    def _load_saved(self, module, normalize):
         self._module(module)
         path = self.host.path(f'{RECIPES}/{module}.json')
         if not path.exists():
@@ -319,13 +330,13 @@ class RootManager:
             saved = json.loads(path.read_text(encoding='utf-8'))
             if saved['schema'] != 1 or saved['module'] != module:
                 raise ValueError()
-            self._values(module, saved['values'])
+            normalized = self._values(module, saved['values'])
             for key in ('service_active', 'service_enabled'):
                 if saved.get(key) is not None and type(saved[key]) is not bool:
                     raise ValueError()
             if set(saved) != {'schema', 'module', 'values', 'service_active', 'service_enabled'}:
                 raise ValueError()
-            return saved
+            return {**saved, 'values': normalized} if normalize else saved
         except (ValueError, KeyError, TypeError):
             raise RootActionError('Saved recipe is invalid; preview a new recipe.', 'INVALID_RECIPE') from None
 
@@ -377,7 +388,8 @@ class RootManager:
                        'kind': 'install', 'status': 'INSTALLING', 'packages': plan['packages']}
             self._journal(journal)
             try:
-                self._checked(['apt-get', 'install', '--yes', '--no-install-recommends', *plan['packages']], timeout=900)
+                with phase_context('package-install'):
+                    self._checked(['apt-get', 'install', '--yes', '--no-install-recommends', *plan['packages']], timeout=900)
                 integration = self._recipes().post_install(self.host, module)
             except Exception:
                 journal['status'] = 'INSTALL_FAILED'
@@ -610,7 +622,8 @@ class RootManager:
                                  for key, field in [('service_active', 'active'), ('service_enabled', 'enabled')])
             # Non-file resources (currently timezone) explicitly declare commands only when changed.
             resource_change = not trusted['files'] and bool(trusted.get('apply_commands'))
-            previous_recipe = self.load_saved(module)
+            # 顯示可補欄，回復備份則保留升級前原始配方的欄位形狀。
+            previous_recipe = self._load_saved(module, normalize=False)
             saved_target = {key: trusted[key] for key in ('schema', 'module', 'values', 'service_active', 'service_enabled')}
             recipe_change = previous_recipe != saved_target
             if not changed and not service_change and not resource_change and not recipe_change:
@@ -650,6 +663,8 @@ class RootManager:
                     self._atomic(entry['path'], entry['content'].encode('utf-8'), metadata)
                 for command in trusted.get('validate', []):
                     self._checked(command)
+                if module == 'ssh':
+                    self._recipes().verify_ssh_configuration(self.host, trusted)
                 for command in trusted.get('apply_commands', []):
                     # Reload commands are needed only when content actually changed.
                     if changed or resource_change or not any(word in {'reload', 'restart', 'reload-or-restart'} for word in command):
@@ -665,7 +680,7 @@ class RootManager:
                 journal['restore_guard'] = self.plan(module, trusted['values'], trusted.get('service_active'), trusted.get('service_enabled'))['fingerprint']
                 journal['status'] = 'APPLIED'
                 self._journal(journal)
-            except Exception:
+            except Exception as apply_error:
                 try:
                     journal['status'] = 'ROLLING_BACK'
                     self._journal(journal)
@@ -685,7 +700,9 @@ class RootManager:
                     journal['status'] = 'RECOVERY_REQUIRED'
                     self._journal(journal)
                     raise RootActionError(f'Apply and rollback failed; inspect {BACKUPS}/{identifier} and {TRANSACTIONS}/{identifier}.', 'RECOVERY_REQUIRED') from None
-                raise RootActionError(f'Apply failed; reversible files and service state were restored. Transaction {identifier}.', 'ROLLED_BACK') from None
+                from .root_recipes import PHPVerificationError, SSHVerificationError
+                detail = (' ' + apply_error.safe_detail) if isinstance(apply_error, (PHPVerificationError, SSHVerificationError)) else ''
+                raise RootActionError(f'Apply failed; reversible files and service state were restored. Transaction {identifier}.{detail}', 'ROLLED_BACK') from None
             return self._log_result({'status': 'APPLIED', 'module': module, 'transaction_id': identifier,
                     'message': 'Selected configuration applied and saved.', 'verification': verification})
 

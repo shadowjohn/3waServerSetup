@@ -8,7 +8,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.css.query import NoMatches
 from textual.screen import ModalScreen
-from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, Select, Static, Switch, TabbedContent, TabPane, Tabs, TextArea
+from textual.widgets import Button, Checkbox, Footer, Header, Input, Label, RichLog, Select, Static, Switch, TabbedContent, TabPane, Tabs, TextArea
 from . import VERSION, revision, version_info, update_management_available, release_public, valid_release_tag, network_management_available, network_public
 from .model import ROOT, FIELDS, LABELS, preview, firewall_preview, apache_candidate
 from .probes import collect, root_management_available
@@ -79,9 +79,11 @@ class SettingApp(App):
     #fw-sources, #fw-ports { width: 1fr; }
     #packages-list { height: auto; }
     #packages-list Checkbox { width: 1fr; height: auto; min-height: 1; }
+    #operation-progress { height: auto; max-height: 3; padding: 0 1; background: #173438; display: none; }
+    #operation-log { height: 4; display: none; }
     """
 
-    def __init__(self, ascii_mode=False, plain=False, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None, network_manager=None):
+    def __init__(self, ascii_mode=False, plain=False, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None, network_manager=None, apache_fpm_manager=None):
         super().__init__()
         self.root_manager = root_manager
         self.root_unavailable = ''
@@ -92,6 +94,7 @@ class SettingApp(App):
             except Exception as error:
                 self.root_unavailable = str(error)
         self.root_mode = self.root_manager is not None
+        self.apache_fpm_manager = apache_fpm_manager
         self.update_root = update_management_available()
         self.network_root = network_management_available()
         self.network_manager = network_manager
@@ -136,6 +139,7 @@ class SettingApp(App):
         self._swap_initialized = False
         self._swap_editor_path = '/swap.img'
         self.fw_draft = None
+        self._fw_draft_loaded = False
         if self.root_mode:
             from .firewall_rules import default_config
             self.fw_draft = default_config()
@@ -179,6 +183,11 @@ class SettingApp(App):
                 except Exception:
                     self.swap_state = {'supported': False, 'detail': 'Swap backend is unavailable.'}
         self.root_busy = False
+        self._operation_started = None
+        self._operation_event = None
+        self._operation_event_at = None
+        self._operation_last_stage = None
+        self._operation_session = 0
         self.root_capabilities = {}
         self._root_initialized = set()
         self._busy_widgets = []
@@ -223,6 +232,8 @@ class SettingApp(App):
                                 yield Static(hint, classes='hint', markup=False)
                                 if self.root_mode and module in ROOT_MODULES:
                                     yield Static('Reading root recipe capabilities...', id=f'root-cap-{module}', classes='hint', markup=False)
+                                    if module == 'ssh':
+                                        yield Static('SSH 閒置連線保活：先檢查設定語法與全域生效值，再 reload 已啟動的 SSH。新連線使用新值，現有登入保留；本頁服務與開機狀態維持現況。', classes='hint', markup=False)
                                 self.field_ids[module] = {}
                                 for index, (key, default) in enumerate(fields.items()):
                                     widget_id = f'{module}-{index}'
@@ -247,6 +258,13 @@ class SettingApp(App):
                                         yield Button('Apply recommended', id=f'root-apply-recommended-{module}')
                                         yield Button('Save & apply custom', id=f'root-apply-{module}')
                                         yield Button('Restore last', id=f'root-restore-{module}')
+                                    if module == 'apache':
+                                        yield Static('Apache event + PHP-FPM：獨立檢閱切換 PHP handler 與 MPM；會 restart Apache。套件安裝不會自行切換既有 mod_php。可另行還原 handler，與上方一般設定還原分開。', classes='hint', markup=False)
+                                        with Horizontal(classes='buttons'):
+                                            yield Button('Read handler status', id='apache-fpm-status')
+                                            yield Button('Review event + FPM', id='apache-fpm-apply', variant='warning')
+                                            yield Button('Restore handler', id='apache-fpm-restore')
+                                        yield TextArea('', read_only=True, id='out-apache-fpm', classes='output')
                                     if module == 'mariadb':
                                         yield Static('MariaDB root access / separate security transaction', classes='module-state', markup=False)
                                         yield Static('Reading live root access flags...', id='mariadb-security-status', classes='hint', markup=False)
@@ -412,6 +430,8 @@ class SettingApp(App):
                             yield Input('', placeholder='IP/CIDR, comma separated (IPv4/IPv6)' if self.root_mode else 'Required IPv4/CIDR, comma separated. No real data saved.', id='fw-sources')
                             if self.root_mode:
                                 yield Static('Restricted accepts multiple IP/CIDR: 0.0.0.0/0 = all IPv4; ::/0 = all IPv6. Public = both families for only this service. An IPv4-only allow list blocks new IPv6 connections. SSH rescue uses the verified actual peer and SSH port, independently of this service list.', classes='hint', markup=False)
+                                yield Static('多個來源用半形逗號，例如 192.168.0.0/16,111.246.98.67/32。逐服務 Update service draft → Save recipe → 最後一次 Review & apply。Apply 會 replace 整份服務規則；預設拒絕新入站，再允許所選服務，不必先套用 deny。保留目前 SSH 救援與 120 秒回復，須由新 SSH 確認。', id='fw-help', classes='hint', markup=False)
+                                yield Static('Saved recipe not loaded：若曾儲存規則，請先 Load saved 再修改；啟動畫面使用全部服務停用的草稿。', id='fw-draft-state', classes='hint', markup=False)
                             with Horizontal(classes='field'):
                                 yield Label('Enable this draft rule', markup=False)
                                 yield Switch(False, id='fw-enabled')
@@ -427,7 +447,7 @@ class SettingApp(App):
                                     yield Button('Review & apply', id='fw-apply', variant='warning')
                                 with Horizontal(classes='buttons'):
                                     yield Button('Read live status', id='fw-status')
-                                    yield Button('Reset draft', id='fw-reset')
+                                    yield Button('Deny services draft', id='fw-reset')
                             else:
                                 with Horizontal(classes='buttons'):
                                     yield Button('Add draft rule', id='fw-add')
@@ -457,10 +477,19 @@ class SettingApp(App):
                             yield TextArea('', read_only=True, id='out-update', classes='output')
                     with TabPane('SQLite', id='tab-sqlite'):
                         with VerticalScroll():
-                            yield Static('Explicit local CLI memory-only check. No PHP settings change; no native module path accepted by this UI. SpatiaLite without a module is UNVERIFIED. CLI results never prove FPM health.', classes='hint', markup=False)
-                            yield Button('Run CLI smoke', id='sqlite-run')
+                            yield Static('CLI 記憶體測試：PDO 讀寫與兩個 driver 的 RTree 正反例。未指定模組時 SpatiaLite 為 UNVERIFIED。CLI 通過不代表 FPM；這裡不改 PHP ini 或開啟載入開關。', classes='hint', markup=False)
+                            yield Button('Run PDO + RTree', id='sqlite-run')
+                            if self.root_mode:
+                                yield Static('以下兩項會載入你指定的可信本機原生模組。先安裝官方 libsqlite3-mod-spatialite，並完成羽山版 PDO 與 SQLite3 extension_dir 設定。快速測試含 SQL load_extension 與空間查詢；完整驗收為兩個 driver 各 30,000 筆。', classes='hint', markup=False)
+                                yield Input('/var/www/sqlite3_ext/mod_spatialite.so', placeholder='Trusted absolute mod_spatialite.so path', id='sqlite-module')
+                                with Horizontal(classes='buttons'):
+                                    yield Button('Test SQL + spatial', id='sqlite-spatial')
+                                    yield Button('Full 30k / driver', id='sqlite-acceptance')
                             yield TextArea('', read_only=True, id='sqlite-output', classes='output')
             yield Static(render_mascot(self.ascii_mode or self.plain), id='mascot', markup=False)
+        if self.root_mode:
+            yield Static('', id='operation-progress', markup=False)
+            yield RichLog(id='operation-log', markup=False, highlight=False, max_lines=100, auto_scroll=True)
         yield Footer()
 
     async def on_mount(self):
@@ -472,6 +501,7 @@ class SettingApp(App):
         if self.root_mode:
             self.set_interval(1, self._fw_tick)
             self.set_interval(1, self._banip_tick)
+            self.set_interval(1, self._operation_tick)
         if self.network_root:
             self.set_interval(1, self._network_tick)
 
@@ -1266,6 +1296,8 @@ class SettingApp(App):
             if operation == 'reset':
                 from .firewall_rules import default_config
                 self._fw_set_draft(default_config())
+                self._fw_draft_loaded = True
+                self.query_one('#fw-draft-state', Static).update('全部服務封鎖草稿：只改記憶體，尚未套用。套用仍保留目前 SSH 救援；開放所需服務後可一次 Apply。')
                 return
             if operation in {'update', 'save', 'preview', 'apply'}:
                 self._fw_update_draft()
@@ -1287,9 +1319,13 @@ class SettingApp(App):
                 saved = await asyncio.to_thread(self.firewall_manager.load_saved)
                 if saved is not None:
                     self._fw_set_draft(saved)
+                    self._fw_draft_loaded = True
+                    self.query_one('#fw-draft-state', Static).update('已載入 saved recipe；修改各服務後，最後一次套用整份規則。草稿不代表目前 kernel 規則。')
                 self._root_result('firewall', {'status': 'DRAFT_LOADED' if saved else 'NO_SAVED_RECIPE', 'message': 'No live firewall rules changed.'})
             elif operation == 'save':
                 self._root_result('firewall', await asyncio.to_thread(self.firewall_manager.save, config))
+                self._fw_draft_loaded = True
+                self.query_one('#fw-draft-state', Static).update('整份草稿已儲存，尚未套用；Review & apply 會替換整份服務規則。')
             elif operation in {'preview', 'apply'}:
                 plan = await asyncio.to_thread(self.firewall_manager.plan, config)
                 detail = self._review_details('firewall', 'apply', plan)
@@ -1358,10 +1394,64 @@ class SettingApp(App):
 
     def _start_root_busy(self):
         self.root_busy = True
+        self._operation_session += 1
+        self._operation_started = time.monotonic()
+        self._operation_event = None
+        self._operation_event_at = None
+        self._operation_last_stage = None
+        if self.root_mode:
+            self.query_one('#operation-log', RichLog).clear()
+            self.query_one('#operation-log', RichLog).display = True
+            self._operation_tick()
         self._busy_widgets = [(widget, widget.disabled) for widget in self.query('Button, Checkbox, Input, Select, Switch')]
         self._busy_widgets += [(widget, widget.disabled) for widget in self.query(TextArea) if not widget.read_only]
         for widget, _disabled in self._busy_widgets:
             widget.disabled = True
+
+    @staticmethod
+    def _output_size(count):
+        value = float(count)
+        for unit in ('B', 'KiB', 'MiB', 'GiB'):
+            if value < 1024 or unit == 'GiB':
+                return f'{value:.1f} {unit}'
+            value /= 1024
+
+    def _receive_operation_progress(self, session, event):
+        if not self.root_busy or session != self._operation_session:
+            return
+        self._operation_event = event
+        self._operation_event_at = time.monotonic()
+        stage = (event['phase'], event.get('command'), event['state'])
+        if stage != self._operation_last_stage:
+            self._operation_last_stage = stage
+            elapsed = int(time.monotonic() - self._operation_started)
+            self.query_one('#operation-log', RichLog).write(
+                Text(f"{elapsed:>4}s  {event['phase']}  {event.get('command') or ''}  {event['state']}"))
+        self._operation_tick()
+
+    def _operation_tick(self):
+        if not self.root_mode or self._operation_started is None:
+            return
+        try:
+            widget = self.query_one('#operation-progress', Static)
+            widget.display = self.root_busy
+            if not self.root_busy:
+                return
+            elapsed = int(time.monotonic() - self._operation_started)
+            event = self._operation_event
+            text = f'執行中 · 已經過 {elapsed}s · '
+            if event is None:
+                text += '準備／檢閱設定；尚無命令輸出'
+            else:
+                since_event = time.monotonic() - self._operation_event_at
+                text += f"{event['phase']} / {event.get('command') or '準備'} / {event['state']}"
+                text += ' · 診斷輸出量 ' + self._output_size(event['output_bytes'])
+                text += f" · 距最近輸出約 {int(event['idle_seconds'] + since_event)}s"
+                if 'download_bytes' in event:
+                    text += ' · APT 已下載 ' + self._output_size(event['download_bytes'])
+            widget.update(text)
+        except NoMatches:
+            pass
 
     def _begin_mariadb_security(self):
         if not self.root_mode or self.root_busy or self._mutation_pending():
@@ -1410,6 +1500,10 @@ class SettingApp(App):
             widget.disabled = disabled
         self._busy_widgets = []
         self.root_busy = False
+        self._operation_started = None
+        if self.root_mode:
+            self.query_one('#operation-progress', Static).display = False
+            self.query_one('#operation-log', RichLog).display = False
         if self.root_mode:
             self._update_root_buttons()
         else:
@@ -1425,6 +1519,34 @@ class SettingApp(App):
             value = network_public(value)
         selector = '#fw-output' if module == 'firewall' else f'#out-{module}'
         self.query_one(selector, TextArea).load_text(json.dumps(value, ensure_ascii=True, indent=2, default=str))
+
+    def _begin_apache_fpm(self, operation):
+        if not self.root_mode or self.root_busy or self._mutation_pending():
+            return
+        self._clear_mariadb_secret()
+        self._start_root_busy()
+        self._root_task = asyncio.create_task(self._prepare_apache_fpm(operation))
+
+    async def _prepare_apache_fpm(self, operation):
+        try:
+            if self.apache_fpm_manager is None:
+                from .root_apache import ApacheFPMManager
+                self.apache_fpm_manager = ApacheFPMManager(self.root_manager)
+            if operation == 'status':
+                self._root_result('apache-fpm', await asyncio.to_thread(self.apache_fpm_manager.status))
+            else:
+                method = self.apache_fpm_manager.restore_plan if operation == 'restore' else self.apache_fpm_manager.plan
+                plan = await asyncio.to_thread(method)
+                detail = ('Apache event + PHP-FPM / ' + operation + '\n\n'
+                          '此動作會切換 native module/conf aliases，並重新啟動 Apache；FPM 先通過設定檢查與獨立 socket probe。\n'
+                          '發生錯誤時還原本次 aliases 與服務狀態；外部變更會阻止自動還原。HTTP/vhost 應用另行驗證。\n\n'
+                          + json.dumps(plan, ensure_ascii=False, indent=2, default=str))
+                self.push_screen(RootReview('Apache handler: ' + operation, detail),
+                                 lambda confirmed: self._review_completed(confirmed, 'apache-fpm', operation, plan))
+                return
+        except Exception as error:
+            self._root_result('apache-fpm', {'status': 'FAILED', 'code': getattr(error, 'code', 'APACHE_FPM_FAILED'), 'message': str(error)})
+        self._finish_root_operation()
 
     async def _prepare_root_operation(self, module, operation, values, targets):
         try:
@@ -1612,11 +1734,23 @@ class SettingApp(App):
         self._root_task = asyncio.create_task(self._execute_root_operation(module, operation, plan))
 
     async def _execute_root_operation(self, module, operation, plan):
+        from .operation_progress import progress_context
+        loop = asyncio.get_running_loop()
+        session = self._operation_session
+        def receive(event):
+            loop.call_soon_threadsafe(self._receive_operation_progress, session, event)
+        with progress_context(receive):
+            await self._execute_root_operation_body(module, operation, plan)
+
+    async def _execute_root_operation_body(self, module, operation, plan):
         self._root_result(module, {'status': 'RUNNING', 'message': 'Operation in progress; exit is disabled until the result.'})
         succeeded = False
         password = None
         try:
-            if module == 'startup':
+            if module == 'apache-fpm':
+                method = self.apache_fpm_manager.restore if operation == 'restore' else self.apache_fpm_manager.apply
+                result = await asyncio.to_thread(method, plan)
+            elif module == 'startup':
                 method = {'apply': self.startup_manager.apply, 'run': self.startup_manager.run_once, 'restore': self.startup_manager.restore}[operation]
                 result = await asyncio.to_thread(method, plan)
             elif module == 'php-feather':
@@ -1746,6 +1880,9 @@ class SettingApp(App):
         if action == 'root-security-mariadb':
             self._begin_mariadb_security()
             return
+        if self.root_mode and action.startswith('apache-fpm-'):
+            self._begin_apache_fpm(action[len('apache-fpm-'):])
+            return
         if action.startswith('root-'):
             operation, _, module = action[len('root-'):].rpartition('-')
             self._begin_root_operation(module, operation)
@@ -1781,10 +1918,30 @@ class SettingApp(App):
                 output.load_text(firewall_preview(json.dumps(self.fw_config)))
             except (ValueError, TypeError) as error:
                 output.load_text(f'INVALID DRAFT: {error}')
-        elif action == 'sqlite-run':
-            event.button.disabled = True
+        elif action in {'sqlite-run', 'sqlite-spatial', 'sqlite-acceptance'}:
+            if self.root_busy:
+                return
+            sqlite_buttons = list(self.query('#sqlite-run, #sqlite-spatial, #sqlite-acceptance'))
+            if self.root_mode:
+                self._start_root_busy()
+                self._receive_operation_progress(self._operation_session, {
+                    'phase': 'verify', 'command': 'php', 'state': 'running',
+                    'output_bytes': 0, 'idle_seconds': 0})
+            else:
+                for button in sqlite_buttons:
+                    button.disabled = True
             self.query_one('#sqlite-output', TextArea).load_text('Running explicitly requested local CLI smoke...')
             try:
-                self.query_one('#sqlite-output', TextArea).load_text(await asyncio.to_thread(sqlite_smoke))
+                if action == 'sqlite-run':
+                    output = await asyncio.to_thread(sqlite_smoke)
+                else:
+                    from .diagnostics import sqlite_spatial_smoke
+                    module = self.query_one('#sqlite-module', Input).value.strip()
+                    output = await asyncio.to_thread(sqlite_spatial_smoke, module, acceptance=action == 'sqlite-acceptance')
+                self.query_one('#sqlite-output', TextArea).load_text(output)
             finally:
-                event.button.disabled = False
+                if self.root_mode:
+                    self._finish_root_operation()
+                else:
+                    for button in sqlite_buttons:
+                        button.disabled = False

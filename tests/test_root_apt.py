@@ -101,6 +101,17 @@ class AptTests(unittest.TestCase):
         self.assertTrue(result['reboot_required'])
         self.assertEqual(self.journals[-1]['status'], 'APT_UPGRADED')
 
+    def test_update_reports_phase_without_publishing_raw_source_diagnostics(self):
+        from server_setting.operation_progress import progress_context
+        plan, run = self.api()
+        events = []
+        with progress_context(events.append):
+            result = run(self.manager, plan(self.manager, 'update'))
+        self.assertEqual(result['status'], 'APT_UPDATED')
+        self.assertIn('apt-update', [event['phase'] for event in events])
+        self.assertNotIn('private-url', str(events))
+        self.assertNotIn('secret-source', str(events))
+
     def test_stale_or_tampered_preview_is_rejected_before_actual_apt(self):
         plan, run = self.api()
         preview = plan(self.manager, 'upgrade')

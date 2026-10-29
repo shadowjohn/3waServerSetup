@@ -61,6 +61,33 @@ System updates 頁的 `apt update` 更新來源清單，任何來源錯誤皆回
 
 ## 驗證範圍
 
+SSH 推薦設定為 `ClientAliveInterval 60` 與 `TCPKeepAlive yes`；兩者是不同機制，並非改名。前者在沒有收到 client 資料時經 SSH 加密通道要求回應，後者啟用 TCP 層 keepalive。`ClientAliveCountMax` 沿用主機原值；正常有回應的閒置連線與真正無回應的連線不同，這不是保證網路中斷後永不斷線的設定。[OpenSSH sshd_config](https://man.openbsd.org/sshd_config#ClientAliveInterval)
+
+工具使用原生 `/etc/ssh/sshd_config.d/00-3wa-server-setup.conf`，由 `/etc/ssh/sshd_config` 的全域 Include 載入。套用先通過 `sshd -t`、`sshd -T` 全域生效值檢查，原服務已啟動時才 reload；不提供停止 SSH 或切換開機狀態的操作。原本的 Port、登入驗證、金鑰及 Match 區塊保留，Match 使用者的覆寫另以實際連線情境驗證。
+
+reload 後的新連線使用新設定；目前已建立的登入保留原連線設定。自訂 ssh.service／SSHD_OPTS 可能改用其他設定檔，工具會拒絕不支援的 unit／環境配置，避免把預設檔的 `sshd -T` 結果當成另一份設定的證據。
+
+FTP 推薦設定保留本機帳號寫入與既有 PASV 60000–60100，另加入使用者指定的 IPv4 監聽、權限與傳輸記錄：
+
+```ini
+file_open_mode=0777
+local_umask=022
+listen=YES
+listen_ipv6=NO
+local_enable=YES
+anonymous_enable=NO
+xferlog_enable=YES
+xferlog_file=/var/log/vsftpd.log
+```
+
+這些值進入同一份 `/etc/vsftpd.conf` 檢閱、儲存、套用與還原；未管理的原生指令保留。權限使用帶 `0` 前綴的八進位值，拒絕含 8／9 的值，以及同時 `listen=YES`、`listen_ipv6=YES`。傳輸記錄格式沿用主機既有選擇：`xferlog_file` 用於 standard xferlog 格式；預設 vsftpd 格式使用 `vsftpd_log_file`（原生預設也是 `/var/log/vsftpd.log`）。若主機已自訂 syslog 或雙格式設定，需另依該設定確認實際記錄位置。[Ubuntu vsftpd.conf](https://manpages.ubuntu.com/manpages/resolute/man5/vsftpd.conf.5.html)
+
+PHP 配方同時寫入同版本 CLI、FPM 的 `conf.d/zz-3wa-server-setup.ini`，不覆寫原本的 `php.ini`、Feather 或 SQLite3 模組設定。CLI 使用版本化原生命令讀取實際生效值，FPM 使用獨立 FastCGI request；結果分列 `sapis.cli` 與 `sapis.fpm`。若其他 ini 或 pool 覆寫導致不符，交易還原，並指出 SAPI、欄位與可能來源。FPM 未啟動時仍檢查 CLI，整體 FPM 驗證維持 UNVERIFIED。
+
+Time 頁的 `Install service` 安裝 `ntpsec-ntpdate`，提供 `ntpdate` 指令；時區套用不會自行停止既有校時服務或跳動系統時間。[Ubuntu 26.04 ntpdate](https://manpages.ubuntu.com/manpages/resolute/man8/ntpdate.8.html)
+
+長命令執行時，畫面下方顯示階段、整體經過秒數、距最近輸出的時間與診斷輸出量；每秒更新，階段轉換另列在簡要 log。這些是安全量測，不公開原始來源 URL、密碼或編譯輸出。APT 若提供 `Fetched` 摘要，另顯示實際下載量；沒有可靠總量時不提供百分比或預估剩餘時間。Feather 的編譯 worker 可能靜默，畫面仍顯示 compile 階段與計時，不能把靜默判定為卡死。
+
 成功結果會列出實際驗證範圍。Apache 檢查 native include、設定語法與 daemon；PHP 透過獨立 FastCGI request 檢查 FPM 生效值及 SQLite 模組，CLI 結果分開顯示。Samba 檢查 testparm 全域值；MariaDB 檢查 option file 及本機 socket 的選定 GLOBAL 變數。FTP 僅檢查選定設定結構與 daemon。時區檢查目前值，NTP 同步獨立觀察。
 
 FTP 登入／TLS／傳輸、Samba 分享權限與帳密、資料庫應用程式帳號與資料、各網站 vhost 都需要另作應用層驗收。多版本／多 pool PHP、舊 mod_php/prefork 自動遷移、自訂 include／systemd FPM 結構並未支援；PHP 偵測到非空 prepend／append bootstrap 時會保留原值並阻擋 probe，不會修改 worker 的 PHP_ADMIN_VALUE。

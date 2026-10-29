@@ -7,7 +7,7 @@ unit using the dedicated unprivileged builder account.
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import secrets
 import shutil
@@ -18,12 +18,16 @@ import sys
 import tempfile
 from urllib.parse import urlsplit
 
+WORKER_FILE = Path(__file__).resolve()
+_WORKER_SOURCE_SHA256 = hashlib.sha256(WORKER_FILE.read_bytes()).hexdigest()
+
 if not __package__:
-    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    sys.path.insert(0, str(WORKER_FILE.parents[1]))
     __package__ = 'server_setting'
 from .root_actions import Host, RootManager, RootActionError, _fingerprint, _json
 from .root_packages import PackageManager, PackageHost
 from .trusted_commands import resolve
+from .operation_progress import phase_context, emit_progress, run_captured
 
 
 STATE = '/var/lib/3wa-server-setup/feather-build'
@@ -201,8 +205,9 @@ def unit_command(workspace, job, identifier):
                   'Environment=PATH=/usr/sbin:/usr/bin:/sbin:/bin HOME=' + workspace + ' LANG=C LC_ALL=C',
                   'UnsetEnvironment=LD_PRELOAD LD_LIBRARY_PATH PYTHONPATH PYTHONHOME BASH_ENV ENV PHPRC PHP_INI_SCAN_DIR APT_CONFIG']
     return ['systemd-run', '--quiet', '--wait', '--pipe', '--collect', '--service-type=exec',
+            '--expand-environment=no',
             '--unit=threewa-feather-build-' + identifier, *['--property=' + value for value in properties],
-            '/usr/bin/python3', '-I', '/opt/3waServerSetting/server_setting/php_feather_build.py', '--worker', job]
+            '/usr/bin/python3', '-I', str(WORKER_FILE), '--worker', job]
 
 
 def _elf(data):
@@ -262,9 +267,8 @@ class FeatherHost(PackageHost):
         if apt_config is not None:
             env['APT_CONFIG'] = str(apt_config)
         try:
-            result = subprocess.run([binary, *argv[1:]], stdin=subprocess.DEVNULL, capture_output=True,
-                                    text=True, errors='replace', timeout=timeout, cwd=cwd, env=env, shell=False, check=False)
-            if len(result.stdout) + len(result.stderr) > 8 * 1024 * 1024:
+            result = run_captured([binary, *argv[1:]], timeout=timeout, cwd=cwd, env=env, command=argv[0])
+            if result.output_truncated and argv[0] not in {'apt-get', 'systemd-run'}:
                 raise RootActionError('Build command output exceeded its bound.', 'FEATHER_BUILD_FAILED')
             return result
         except subprocess.TimeoutExpired:
@@ -330,8 +334,35 @@ class FeatherBuilder:
     def _packages(self):
         return PackageManager(_BuildDependencyHost(self.host))
 
+    def _worker_source(self):
+        guidance = ('Run the Feather build from a root-owned, publicly readable and traversable '
+                    'checkout under /opt; its worker must be visible to the systemd sandbox.')
+        try:
+            virtual = PurePosixPath('/') / WORKER_FILE.relative_to(self.host.root).as_posix()
+        except ValueError:
+            raise RootActionError(guidance, 'FEATHER_WORKER_PATH') from None
+        if any(virtual.is_relative_to(prefix) for prefix in ('/root', '/home', '/run/user', '/tmp', '/var/tmp')):
+            raise RootActionError(guidance, 'FEATHER_WORKER_PATH')
+        try:
+            self.core._trusted_target(WORKER_FILE)
+            if not WORKER_FILE.lstat().st_mode & 0o004:
+                raise RootActionError(guidance, 'FEATHER_WORKER_PATH')
+            for parent in WORKER_FILE.parents:
+                if parent.lstat().st_mode & 0o005 != 0o005:
+                    raise RootActionError(guidance, 'FEATHER_WORKER_PATH')
+                if parent == self.host.root:
+                    break
+            source = _file(WORKER_FILE, maximum=1024 * 1024)
+        except (OSError, RootActionError):
+            raise RootActionError(guidance, 'FEATHER_WORKER_PATH') from None
+        if _sha(source) != _WORKER_SOURCE_SHA256:
+            raise RootActionError('Loaded Feather worker source changed; restart the selected /opt checkout before building.', 'FEATHER_WORKER_CHANGED')
+
     def plan(self):
         self.core._gate('time')
+        # Reuse the existing root path boundary; the frozen physical source also
+        # prevents a later current-alias switch from choosing another worker.
+        self._worker_source()
         native = self.host.inspect()
         if native.get('abi') != '20250925' or native.get('arch') != 'amd64' or native.get('nts') is not True or not native.get('php_version', '').startswith('8.5.'):
             raise RootActionError('Unsupported native PHP build profile.', 'FEATHER_NOT_READY')
@@ -348,7 +379,8 @@ class FeatherBuilder:
         result = {'schema': 1, 'module': 'php-feather-build', 'native': native, 'source_profile': profile,
                   'dependencies': dependencies, 'patch_profile': PATCH_PROFILE, 'patch_sha256': PATCH_SHA256,
                   'builder_account': {'name': BUILDER, 'system': True, 'shell': '/usr/sbin/nologin', 'home': '/nonexistent'},
-                  'build': {'phpize': ['phpize8.5'], 'configure': ['sh', './configure', '--with-php-config=/usr/bin/php-config8.5', '--with-pdo-sqlite'],
+                  'build': {'worker_file': str(WORKER_FILE), 'worker_sha256': _WORKER_SOURCE_SHA256,
+                            'phpize': ['phpize8.5'], 'configure': ['sh', './configure', '--with-php-config=/usr/bin/php-config8.5', '--with-pdo-sqlite'],
                             'make': ['make', '-j2'], 'unit_limit_seconds': 900, 'make_install': False},
                   'notes': ['Fetch the exact Ubuntu source package through a private authenticated APT source cache; system sources are unchanged.',
                             'Only missing build dependencies are installed; existing dependency upgrades are refused.',
@@ -411,8 +443,9 @@ class FeatherBuilder:
         text = ''.join(key + ' "' + value + '";\n' for key, value in config.items())
         self.core._atomic(base + '/apt.conf', text.encode(), {'mode': 0o600, 'uid': 0, 'gid': 0, 'xattrs': {}})
         options = {'apt_config': root / 'apt.conf', 'cwd': root / 'download', 'timeout': 900}
-        self.host.checked(['apt-get', '--error-on=any', 'update'], **options)
-        self.host.checked(['apt-get', '--download-only', '--only-source', 'source', 'php8.5=' + native['package_version']], **options)
+        with phase_context('source-download'):
+            self.host.checked(['apt-get', '--error-on=any', 'update'], **options)
+            self.host.checked(['apt-get', '--download-only', '--only-source', 'source', 'php8.5=' + native['package_version']], **options)
         return root / 'download', verify_source_downloads(root / 'download', native['package_version'])
 
     def _public_dir(self, absolute):
@@ -454,7 +487,8 @@ class FeatherBuilder:
             if self.host.inspect() != native or source_profile(self.host) != trusted['source_profile']:
                 raise RootActionError('PHP/source identity changed during authenticated fetch.', 'STALE_PLAN')
             if dependencies['changes']:
-                value = self.host.run(dependencies['command'], timeout=900)
+                with phase_context('build-dependencies'):
+                    value = self.host.run(dependencies['command'], timeout=900)
                 if value.returncode:
                     raise RootActionError('Build dependency installation failed; package state may have changed.', 'FEATHER_DEPENDENCIES_FAILED')
             installed = self._packages()._installed(sorted(set(dependencies['names']) | {row['name'] for row in dependencies['changes']}))
@@ -487,7 +521,9 @@ class FeatherBuilder:
         # The orchestrator's FEATHER_BUILDING record remains pending while the
         # unprivileged unit works. Do not retain the global flock for minutes.
         try:
-            self.host.checked(unit_command(str(workspace), str(job_path), identifier), timeout=900)
+            with phase_context('compile'):
+                self.host.checked(unit_command(str(workspace), str(job_path), identifier), timeout=900)
+            emit_progress('verify')
             os.chown(workspace, 0, 0)
             workspace.chmod(0o700)
             report = json.loads(self._worker_file(workspace, 'result.json', account['uid']).decode())
@@ -569,8 +605,8 @@ def _worker_run(argv, cwd, timeout=180, stage='command'):
         if info.st_uid != 0 or info.st_mode & 0o022:
             raise RootActionError('Builder executable is not root controlled.', 'FEATHER_BUILD_FAILED')
     try:
-        result = subprocess.run([binary, *argv[1:]], stdin=subprocess.DEVNULL, capture_output=True,
-            timeout=timeout, cwd=cwd, check=False, env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': str(cwd), 'LC_ALL': 'C', 'LANG': 'C'})
+        result = run_captured([binary, *argv[1:]], timeout=timeout, cwd=cwd, command=argv[0], text=False,
+            env={'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'HOME': str(cwd), 'LC_ALL': 'C', 'LANG': 'C'})
     except subprocess.TimeoutExpired:
         _WORKER_DIAGNOSTICS['commands'].append({'stage': stage, 'command': argv[0], 'code': 'TIMEOUT'})
         raise RootActionError('Unprivileged build step timed out.', 'TIMEOUT') from None
@@ -579,6 +615,8 @@ def _worker_run(argv, cwd, timeout=180, stage='command'):
         'stderr_tail': result.stderr[-8192:].decode('utf-8', 'replace')})
     if result.returncode:
         raise RootActionError('Unprivileged build/probe failed; native diagnostics were discarded.', 'FEATHER_BUILD_FAILED')
+    if result.output_truncated and stage.startswith('probe-'):
+        raise RootActionError('Unprivileged probe metadata exceeded its bound.', 'FEATHER_BUILD_FAILED')
     return result.stdout.decode('utf-8', 'strict')
 
 

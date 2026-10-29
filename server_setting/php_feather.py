@@ -391,6 +391,8 @@ echo json_encode(['sapi'=>PHP_SAPI,'values'=>['gate'=>$gate,'sql_load_extension'
             self.core._journal(journal)
         try:
             built=self.builder.build(trusted['build_plan'],transaction_id=identifier)
+            from .operation_progress import emit_progress
+            emit_progress('activate')
             artifact=self._validate_artifact(built)
             with self.core._lock():
                 self.core._check_pending(ignore_id=identifier)

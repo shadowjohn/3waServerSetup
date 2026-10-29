@@ -1,5 +1,8 @@
 import importlib
+import json
+from contextlib import nullcontext
 import os
+import re
 import stat
 from pathlib import Path
 import subprocess
@@ -23,6 +26,8 @@ class RecipeHost:
         self.reads = []
         self.fpm_unit_overrides = {}
         self.manager_environment = ''
+        self.cli_values = dict(FIELDS['php'])
+        self.cli_scanned = None
         self.apache_include_output = ('Included configuration files:\n'
             '  (*) /etc/apache2/apache2.conf\n'
             '    (222) /etc/apache2/conf-enabled/zz-3wa-server-setup.conf\n'
@@ -58,7 +63,12 @@ class RecipeHost:
             properties = {'DropInPaths': '', 'EnvironmentFiles': '', 'Environment': '',
                           'PassEnvironment': '', 'RootDirectory': '', 'RootImage': '',
                           'ExecStart': '{ path=/usr/sbin/php-fpm8.5 ; argv[]=/usr/sbin/php-fpm8.5 --nodaemonize --fpm-config /etc/php/8.5/fpm/php-fpm.conf ; ignore_errors=no ; start_time=[n/a] ; pid=0 ; code=(null) ; status=0/0 }'}
-            properties.update(self.fpm_unit_overrides)
+            if argv[2] == 'ssh.service':
+                properties['ExecStart'] = '{ path=/usr/sbin/sshd ; argv[]=/usr/sbin/sshd -D $SSHD_OPTS ; }'
+                properties['ExecReload'] = '{ path=/usr/sbin/sshd ; argv[]=/usr/sbin/sshd -t ; } ; { path=/bin/kill ; argv[]=/bin/kill -HUP $MAINPID ; }'
+                properties['EnvironmentFiles'] = '/etc/default/ssh (ignore_errors=yes)'
+            else:
+                properties.update(self.fpm_unit_overrides)
             # Native systemctl prints no row for an empty a(sb) array even
             # with --all; an empty Environment as array needs --all.
             if not properties['EnvironmentFiles']:
@@ -68,6 +78,16 @@ class RecipeHost:
             out = ''.join(key + '=' + value + '\n' for key, value in properties.items())
         elif argv[:2] == ['systemctl', 'show-environment']:
             out = self.manager_environment
+        elif argv == ['sshd', '-T']:
+            out = 'clientaliveinterval 60\ntcpkeepalive yes\n'
+        elif argv[0] == 'php8.5':
+            scanned = self.cli_scanned
+            if scanned is None:
+                scanned = ', '.join('/etc/php/8.5/cli/conf.d/' + path.name
+                                    for path in sorted(self.path('/etc/php/8.5/cli/conf.d').glob('*.ini')))
+            out = json.dumps({'sapi': 'cli', 'values': self.cli_values, 'scanned': scanned,
+                              'loaded_ini': '/etc/php/8.5/cli/php.ini',
+                              'extensions': {'pdo_sqlite': True, 'sqlite3': True}})
         elif argv[:2] == ['systemctl', 'show']:
             out = ('LoadState=loaded\nActiveState=' + ('active' if self.active else 'inactive')
                    + '\nUnitFileState=' + ('enabled' if self.enabled else 'disabled') + '\n')
@@ -95,9 +115,11 @@ class RecipesTests(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         self.host = RecipeHost(self.tmp.name)
         self.host.put('/etc/apache2/apache2.conf', 'ServerRoot /etc/apache2\nIncludeOptional conf-enabled/*.conf\n')
-        self.host.put('/etc/vsftpd.conf', '# untouched comment\nlisten=NO\nlisten_ipv6=YES\nwrite_enable=NO\nxferlog_enable=YES\n')
+        self.host.put('/etc/vsftpd.conf', '# untouched comment\nutf8_filesystem=YES\nlisten=NO\nlisten_ipv6=YES\nwrite_enable=NO\nxferlog_enable=YES\n')
         self.host.put('/etc/samba/smb.conf', '[global]\nworkgroup = CUSTOM\nsecurity = user\n[photos]\npath = /srv/photos\nread only = yes\n')
         self.host.put('/etc/mysql/my.cnf', '[client-server]\n!includedir /etc/mysql/mariadb.conf.d/\n')
+        self.host.put('/etc/ssh/sshd_config', 'Include /etc/ssh/sshd_config.d/*.conf\nPort 22\n')
+        self.host.path('/etc/ssh/sshd_config.d').mkdir(parents=True)
         self.seed_fpm()
 
     def seed_fpm(self, version='8.5'):
@@ -106,14 +128,16 @@ class RecipesTests(unittest.TestCase):
         self.host.put(base + 'php-fpm.conf', '[global]\ninclude=/etc/php/' + version + '/fpm/pool.d/*.conf\n')
         self.host.put(base + 'pool.d/www.conf', '[www]\nuser = www-data\ngroup = www-data\nlisten = /run/php/php' + version + '-fpm.sock\n')
         self.host.path(base + 'conf.d').mkdir(parents=True, exist_ok=True)
+        self.host.put('/etc/php/' + version + '/cli/php.ini', '[PHP]\nmemory_limit=-1\n')
+        self.host.path('/etc/php/' + version + '/cli/conf.d').mkdir(parents=True, exist_ok=True)
 
     def write_plan(self, plan):
         for change in plan['files']:
             self.host.put(change['path'], change['content'])
 
-    def test_six_modules_have_concrete_plans_and_no_preview_writes(self):
+    def test_seven_modules_have_concrete_plans_and_no_preview_writes(self):
         before = {str(p.relative_to(self.host.root)): p.read_bytes() for p in self.host.root.rglob('*') if p.is_file()}
-        for module in ('apache', 'php', 'vsftpd', 'samba', 'mariadb', 'time'):
+        for module in ('apache', 'php', 'vsftpd', 'samba', 'mariadb', 'ssh', 'time'):
             with self.subTest(module=module):
                 plan = self.recipes.build_plan(self.host, module, dict(FIELDS[module]))
                 self.assertEqual(plan['module'], module)
@@ -127,7 +151,8 @@ class RecipesTests(unittest.TestCase):
         plan = self.recipes.build_plan(self.host, 'vsftpd', dict(FIELDS['vsftpd']))
         self.write_plan(plan)
         content = self.host.read('/etc/vsftpd.conf')
-        self.assertIn('# untouched comment\nlisten=NO\nlisten_ipv6=YES\n', content)
+        self.assertIn('# untouched comment\nutf8_filesystem=YES\n', content)
+        self.assertIn('listen=YES\nlisten_ipv6=NO\n', content)
         self.assertIn('xferlog_enable=YES\n', content)
         self.assertNotIn('write_enable=NO', content)
         self.assertIn('write_enable=YES', content)
@@ -137,7 +162,7 @@ class RecipesTests(unittest.TestCase):
         self.assertIn('login', verified['detail'].lower())
 
     def test_unmanaged_native_config_lines_keep_original_line_endings(self):
-        cases = [('vsftpd', '/etc/vsftpd.conf', '# custom\r\nlisten=YES\r\nwrite_enable=NO\r\n', b'# custom\r\nlisten=YES\r\n'),
+        cases = [('vsftpd', '/etc/vsftpd.conf', '# custom\r\nutf8_filesystem=YES\r\nlisten=YES\r\nwrite_enable=NO\r\n', b'# custom\r\nutf8_filesystem=YES\r\n'),
                  ('samba', '/etc/samba/smb.conf', '[global]\r\nworkgroup = CUSTOM\r\n[photos]\r\npath = /srv/photos\r\n', b'[photos]\r\npath = /srv/photos\r\n')]
         for module, path, content, preserved in cases:
             with self.subTest(module=module):
@@ -145,6 +170,35 @@ class RecipesTests(unittest.TestCase):
                 plan = self.recipes.build_plan(self.host, module, dict(FIELDS[module]))
                 self.write_plan(plan)
                 self.assertIn(preserved, self.host.path(path).read_bytes())
+
+    def test_ftp_selected_defaults_replace_duplicates_once_and_preserve_other_log_controls(self):
+        self.host.put('/etc/vsftpd.conf', '# site settings\nfile_open_mode=0600\nlocal_umask=077\n'
+                      'listen=NO\nlisten_ipv6=YES\nlisten=NO\nwrite_enable=NO\n'
+                      'xferlog_enable=NO\nxferlog_file=/var/log/old-ftp.log\n'
+                      'xferlog_std_format=NO\nvsftpd_log_file=/var/log/site-ftp.log\nsyslog_enable=NO\n')
+        plan = self.recipes.build_plan(self.host, 'vsftpd', dict(FIELDS['vsftpd']))
+        self.write_plan(plan)
+        content = self.host.read('/etc/vsftpd.conf')
+        for key, value in FIELDS['vsftpd'].items():
+            self.assertEqual(re.findall(r'^' + re.escape(key) + r'=(.*)$', content, re.M), [value])
+        self.assertIn('xferlog_std_format=NO\nvsftpd_log_file=/var/log/site-ftp.log\nsyslog_enable=NO\n', content)
+        self.assertIn('file_open_mode=0777\nlocal_umask=022\n', content)
+        self.assertTrue(self.recipes.verify_plan(self.host, plan)['verified'])
+
+    def test_ftp_expanded_recommendation_restores_the_original_file_bytes(self):
+        from server_setting.root_actions import RootManager
+        original = (b'# Existing FTP\r\nlisten=NO\r\nlisten_ipv6=YES\r\nlocal_umask=077\r\n'
+                    b'file_open_mode=0600\r\nxferlog_std_format=YES\r\nwrite_enable=NO\r\n')
+        self.host.path('/etc/vsftpd.conf').write_bytes(original)
+        manager = RootManager(self.host)
+        with patch.object(manager, '_gate'), patch.object(manager, '_lock', return_value=nullcontext()):
+            result = manager.apply(manager.plan('vsftpd'))
+            self.assertEqual(result['status'], 'APPLIED')
+            configured = self.host.read('/etc/vsftpd.conf')
+            self.assertIn('listen=YES\nlisten_ipv6=NO\n', configured)
+            self.assertIn('file_open_mode=0777\nlocal_umask=022\n', configured)
+            self.assertEqual(manager.restore_last('vsftpd')['status'], 'RESTORED')
+        self.assertEqual(self.host.path('/etc/vsftpd.conf').read_bytes(), original)
 
     def test_samba_preserves_shares_and_checks_effective_globals(self):
         self.host.effective = {'security': 'USER', 'map to guest': 'Never'}
@@ -198,6 +252,114 @@ class RecipesTests(unittest.TestCase):
         evidence['scanned'] = '/etc/php/8.5/fpm/conf.d/20-sqlite3.ini'
         with patch('server_setting.root_fpm.probe_values', return_value=evidence), self.assertRaisesRegex(ValueError, 'loaded|scanned'):
             self.recipes.verify_plan(self.host, plan)
+
+    def test_php_plan_manages_both_sapis_without_editing_native_or_feather_settings(self):
+        self.host.put('/etc/php/8.5/cli/conf.d/20-pdo_sqlite.ini', '; Feather activation\nextension=/opt/custom/pdo_sqlite.so\n')
+        self.host.put('/etc/php/8.5/fpm/conf.d/90-3wa-spatialite.ini', 'sqlite3.extension_dir="/usr/lib/x86_64-linux-gnu"\n')
+        before = {str(path): path.read_bytes() for path in self.host.root.rglob('*') if path.is_file()}
+        plan = self.recipes.build_plan(self.host, 'php', dict(FIELDS['php']))
+        self.assertEqual({entry['path'] for entry in plan['files']}, {
+            '/etc/php/8.5/cli/conf.d/zz-3wa-server-setup.ini',
+            '/etc/php/8.5/fpm/conf.d/zz-3wa-server-setup.ini'})
+        self.write_plan(plan)
+        for path, content in before.items():
+            self.assertEqual(Path(path).read_bytes(), content)
+        self.assertEqual(plan['observations']['cli']['binary'], 'php8.5')
+
+    def test_php_verification_checks_cli_values_and_scan_separately_from_fpm(self):
+        plan = self.recipes.build_plan(self.host, 'php', dict(FIELDS['php']))
+        self.write_plan(plan)
+        evidence = {'sapi': 'fpm-fcgi', 'values': dict(FIELDS['php']),
+                    'scanned': '/etc/php/8.5/fpm/conf.d/zz-3wa-server-setup.ini',
+                    'extensions': {'pdo_sqlite': True, 'sqlite3': True}}
+        with patch('server_setting.root_fpm.probe_values', return_value=evidence):
+            result = self.recipes.verify_plan(self.host, plan)
+            self.assertEqual(set(result.get('sapis', {})), {'cli', 'fpm'})
+            self.host.cli_values['memory_limit'] = '64M'
+            with self.assertRaisesRegex(ValueError, r'CLI.*memory_limit'):
+                self.recipes.verify_plan(self.host, plan)
+            self.host.cli_values['memory_limit'] = FIELDS['php']['memory_limit']
+            self.host.cli_scanned = '/etc/php/8.5/cli/conf.d/20-pdo_sqlite.ini'
+            with self.assertRaisesRegex(ValueError, r'CLI.*(?:loaded|scanned)'):
+                self.recipes.verify_plan(self.host, plan)
+
+    def test_php_capabilities_report_other_ini_and_pool_override_sources(self):
+        self.host.put('/etc/php/8.5/cli/conf.d/zzzz-site.ini', 'memory_limit=256M\n')
+        self.host.put('/etc/php/8.5/fpm/pool.d/www.conf',
+                      '[www]\nuser=www-data\nlisten=/run/php/php8.5-fpm.sock\nphp_admin_value[memory_limit]=512M\n')
+        state = self.recipes.capabilities(self.host, 'php')
+        self.assertEqual(state.get('configured_by_sapi', {}).get('cli', {}).get('memory_limit'), '256M')
+        self.assertEqual(state.get('configured_by_sapi', {}).get('fpm', {}).get('memory_limit'), '512M')
+        self.assertIn('/etc/php/8.5/fpm/pool.d/www.conf',
+                      str(state.get('configuration_sources', {})))
+        # 同值覆寫可以通過真正 runtime probe，不因來源存在就拒絕。
+        self.assertTrue(self.recipes.build_plan(self.host, 'php', dict(FIELDS['php'])))
+
+    def test_cli_bootstrap_and_unknown_managed_content_are_refused_without_writes(self):
+        self.host.put('/etc/php/8.5/cli/conf.d/90-site.ini', 'auto_prepend_file=/srv/site.php\n')
+        with self.assertRaisesRegex(ValueError, 'bootstrap|prepend'):
+            self.recipes.build_plan(self.host, 'php', dict(FIELDS['php']))
+        self.host.path('/etc/php/8.5/cli/conf.d/90-site.ini').unlink()
+        self.host.put('/etc/php/8.5/cli/conf.d/zz-3wa-server-setup.ini', '; Site custom file\nmemory_limit=24M\n')
+        with self.assertRaisesRegex(ValueError, 'ownership|content'):
+            self.recipes.build_plan(self.host, 'php', dict(FIELDS['php']))
+
+    def test_time_install_includes_current_ntpdate_provider(self):
+        self.assertEqual(self.recipes.packages('time'), ['ntpsec-ntpdate'])
+
+    def test_php_dual_dropins_restore_together_and_failure_rolls_both_back(self):
+        from server_setting.root_actions import RootManager, RootActionError
+        manager = RootManager(self.host)
+        fpm_path = '/etc/php/8.5/fpm/conf.d/zz-3wa-server-setup.ini'
+        cli_path = '/etc/php/8.5/cli/conf.d/zz-3wa-server-setup.ini'
+        originals = {fpm_path: b'; Managed by 3waServerSetup; selected settings only.\nmemory_limit=48M\n',
+                     cli_path: b'; Managed by 3waServerSetup; selected settings only.\nmemory_limit=96M\n'}
+        for path, content in originals.items():
+            self.host.put(path, content.decode())
+        evidence = {'sapi': 'fpm-fcgi', 'values': dict(FIELDS['php']), 'scanned': fpm_path,
+                    'extensions': {'pdo_sqlite': True, 'sqlite3': True}}
+        with patch.object(manager, '_gate'), patch.object(manager, '_lock', return_value=nullcontext()), \
+             patch('server_setting.root_fpm.probe_values', return_value=evidence):
+            result = manager.apply(manager.plan('php'))
+            self.assertEqual(result['status'], 'APPLIED')
+            self.assertEqual(self.host.path(fpm_path).read_bytes(), self.host.path(cli_path).read_bytes())
+            self.assertEqual(manager.restore_last('php')['status'], 'RESTORED')
+            for path, content in originals.items():
+                self.assertEqual(self.host.path(path).read_bytes(), content)
+            self.host.cli_values['memory_limit'] = '64M'
+            with self.assertRaises(RootActionError) as failure:
+                manager.apply(manager.plan('php'))
+            self.assertIn('CLI memory_limit', str(failure.exception))
+            self.assertIn(cli_path, str(failure.exception))
+            for path, content in originals.items():
+                self.assertEqual(self.host.path(path).read_bytes(), content)
+
+    def test_php_verification_diagnostic_never_contains_runtime_values_or_unknown_paths(self):
+        plan = self.recipes.build_plan(self.host, 'php', dict(FIELDS['php']))
+        target = plan['observations']['cli']
+        evidence = {'sapi': 'cli', 'loaded_ini': target['main_ini'], 'scanned': target['ini'],
+                    'values': {**FIELDS['php'], 'memory_limit': 'SENSITIVE_RUNTIME_VALUE'},
+                    'extensions': {'pdo_sqlite': True, 'sqlite3': True}}
+        with self.assertRaises(self.recipes.PHPVerificationError) as failure:
+            self.recipes._verify_php_evidence(self.host, target, 'cli', evidence, FIELDS['php'])
+        self.assertIn('CLI memory_limit', failure.exception.safe_detail)
+        self.assertNotIn('SENSITIVE_RUNTIME_VALUE', failure.exception.safe_detail)
+        sanitized = self.recipes.PHPVerificationError('fpm', 'value', key='memory_limit',
+                                                     source='/secret/SENSITIVE_SOURCE')
+        self.assertNotIn('SENSITIVE_SOURCE', sanitized.safe_detail)
+
+    def test_inactive_fpm_still_checks_cli_and_never_claims_fpm_passed(self):
+        self.host.active = False
+        plan = self.recipes.build_plan(self.host, 'php', dict(FIELDS['php']))
+        self.write_plan(plan)
+        with patch('server_setting.root_fpm.probe_values', side_effect=AssertionError('FPM is inactive')):
+            result = self.recipes.verify_plan(self.host, plan)
+            self.assertFalse(result['verified'])
+            self.assertTrue(result['sapis']['cli']['verified'])
+            self.assertNotIn('fpm', result['sapis'])
+            self.host.cli_values['memory_limit'] = '24M'
+            with self.assertRaisesRegex(ValueError, 'CLI.*memory_limit'):
+                self.recipes.verify_plan(self.host, plan)
 
     def test_fpm_bootstrap_config_is_refused_without_touching_existing_content(self):
         cases = [('/etc/php/8.5/fpm/php.ini', '[PHP]\nauto_prepend_file=/srv/bootstrap.php\n'),
@@ -319,7 +481,7 @@ class RecipesTests(unittest.TestCase):
             self.recipes.build_plan(self.host, 'php', dict(FIELDS['php']))
 
     def test_written_managed_recipes_replan_as_noop_without_reload(self):
-        for module in ('apache', 'php', 'vsftpd', 'samba', 'mariadb'):
+        for module in ('apache', 'php', 'vsftpd', 'samba', 'mariadb', 'ssh'):
             with self.subTest(module=module):
                 first = self.recipes.build_plan(self.host, module, dict(FIELDS[module]))
                 self.write_plan(first)

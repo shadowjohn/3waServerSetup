@@ -140,10 +140,12 @@ jobs:
             exit 1
           fi
           printf '%s\n' "3waServerSetting $RELEASE_TAG" '' "Commit: $RELEASE_COMMIT" '' \
-            'Adds the official libsqlite3-mod-spatialite package option and a full PHP SpatiaLite acceptance command: php tests/sqlite-smoke.php --acceptance --module=/var/www/sqlite3_ext/mod_spatialite.so.' '' \
-            'The acceptance workload preserves plain PDO SQL load_extension() and SQLite3::loadExtension(), each inserting 10,000 POINT, LINESTRING and POLYGON records in independent memory databases. Ubuntu 26.04 CLI and FPM validation is documented.' '' \
-            'Program updates do not create the module alias or configure sqlite3.extension_dir. Review docs/spatialite-acceptance.md for the manually verified host configuration. GDAL EPSG:3827/3828 comparison results are included; no new GIS parameters are applied.' '' \
-            'Existing v2026.10.26.003 installations can update directly; the acceptance command uses the existing supported payload path.' '' \
+            'Ubuntu 26.04 field fixes: PHP settings now apply to both CLI and FPM with effective-value verification and rollback diagnostics. Adds reviewed Apache event + FPM migration and restore.' '' \
+            'Adds the requested vsftpd defaults, SSH ClientAliveInterval 60 and TCPKeepAlive yes, ntpsec-ntpdate installation, and live installation phase / elapsed / output telemetry.' '' \
+            'Firewall help explains comma-separated sources and whole-draft application. Native tests verified the 120-second rollback, new SSH confirmation and restoration to the original inactive policy.' '' \
+            'Adds explicit PDO / RTree / SpatiaLite test controls. A fresh Ubuntu 26.04 VM passed 574 tests, 120000 spatial workload rows across CLI and FPM, an FPM pool override rollback, and reboot persistence checks.' '' \
+            'SpatiaLite module aliases and sqlite3.extension_dir remain explicit host setup; program updates do not create them. The conservative Network gate still refuses a conflicting custom backend. See docs/ubuntu26-fresh-validation.md for evidence and limits.' '' \
+            'Existing v2026.10.26.003 and v2026.10.27.001 installations can update directly.' '' \
             'Ubuntu 22.04 and 24.04 validation covers signed release installation, program updates and primary Ethernet Network management. Other service-management writes remain restricted to Ubuntu 26.04.' '' \
             'Existing Ubuntu 26.04 installer, updater and service-management validation is retained.' '' \
             'Network trials require a new physical SSH connection to the target IP within 120 seconds. Program rollback does not undo confirmed IP settings.' '' \

@@ -14,11 +14,26 @@ $names = array('short_open_tag', 'memory_limit', 'post_max_size', 'upload_max_fi
 $values = array();
 foreach ($names as $name) { $values[$name] = ini_get($name); }
 echo json_encode(array('sapi' => PHP_SAPI, 'values' => $values,
+    'loaded_ini' => php_ini_loaded_file() ?: '',
     'scanned' => php_ini_scanned_files() ?: '',
     'extensions' => array('pdo_sqlite' => extension_loaded('pdo_sqlite'),
                           'sqlite3' => extension_loaded('sqlite3'))));
 '''
 _MAX_OUTPUT = 65536
+
+
+def probe_cli_values(host, binary):
+    """使用同版本原生 CLI 配置；不以 -d 強制目標值取得成功。"""
+    result = host.run([binary, '-r', _SOURCE.decode('ascii').removeprefix('<?php\n')], timeout=15)
+    if result.returncode or result.stderr or len(result.stdout or '') > _MAX_OUTPUT:
+        raise ValueError('PHP CLI probe failed; inspect native PHP diagnostics locally.')
+    try:
+        evidence = json.loads(result.stdout or '')
+    except (ValueError, UnicodeDecodeError):
+        raise ValueError('PHP CLI probe did not return valid evidence JSON.') from None
+    if not isinstance(evidence, dict) or not isinstance(evidence.get('values'), dict):
+        raise ValueError('PHP CLI probe returned malformed evidence.')
+    return evidence
 
 
 def _record(kind, content=b''):

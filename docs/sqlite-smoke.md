@@ -1,5 +1,85 @@
 # PDO SQLite / RTree / SpatiaLite CLI smoke test
 
+## 新主機最短驗收流程
+
+在程式 `Install packages` 勾選 PHP SQLite 與 `libsqlite3-mod-spatialite`；再於羽山版 PDO SQLite 區選 CLI、FPM，檢閱編譯／啟用。套件裝好、編譯成功與應用 SQL 可用是三個不同的檢查，下面不以套件已安裝當作成功。
+
+1. 到 SQLite 頁按 `Run PDO + RTree`。PDO 讀寫、PDO RTree、SQLite3 RTree 三項都要 PASS；未選模組的 SpatiaLite UNVERIFIED 是預期結果。
+2. root 模式填可信本機 `mod_spatialite.so` 絕對路徑（預設 `/var/www/sqlite3_ext/mod_spatialite.so`，也可用官方套件實體路徑），按 `Test SQL + spatial`。此路線使用 SQL `load_extension()`，測空間函式與面積正反例，不會為了通過而臨時開啟 gate。
+3. 按 `Full 30k / driver`，實際執行兩份使用者範例的 POINT、LINESTRING、POLYGON，各 driver 各 30,000 筆。兩個 driver 都 PASS 才算完整 CLI 驗收。
+
+同樣可直接執行：
+
+```sh
+cd /opt/3waServerSetting/current
+php --ini
+php tests/sqlite-smoke.php
+php tests/sqlite-smoke.php --module=/var/www/sqlite3_ext/mod_spatialite.so --loader=legacy-sql
+php tests/sqlite-smoke.php --acceptance --module=/var/www/sqlite3_ext/mod_spatialite.so
+```
+
+用 `dpkg -L libsqlite3-mod-spatialite` 確認實體檔位置；若沒有建立 `/var/www/sqlite3_ext` alias，直接代入查到的 `.so`。**CLI 與 FPM 各自需要設定**：PDO SQL 路線須已啟用羽山版 `pdo_sqlite.feather_sql_load_extension=1`；SQLite3 的 `sqlite3.extension_dir` 須指向官方套件實體目錄，例如 amd64 的 `/usr/lib/x86_64-linux-gnu`，symlink 目錄不能取代實體目錄。詳細限制見 [SpatiaLite 設定與雙驅動驗收](spatialite-acceptance.md)。程式更新不會自動建立 alias 或修改此設定。
+
+| 結果 | 判讀與下一步 |
+|---|---|
+| PDO／RTree PASS | 真正建表、寫入與查詢成功；尚未證明 SpatiaLite 或 FPM |
+| PDO `not authorized` | SQL 載入路線未啟用；檢查此 SAPI 是否實際載入羽山模組與 gate |
+| SQLite3 `outside the defined directory` | 檢查 `sqlite3.extension_dir` 與 symlink 解析後的實體目錄 |
+| 缺 `.so` 或 driver | 先補官方套件／PHP driver，再重跑，不能把 UNVERIFIED 當 PASS |
+| CLI PASS，網站仍失敗 | 到 PHP 頁套用並檢查獨立 FPM 驗證；Apache 頁另檢閱 event + FPM handler，網站路由另測 |
+
+完整測試使用記憶體 DB，會執行原生程式碼與資料插入，需要時間；不寫入應用資料庫。只選擇可信的本機模組，root UI 另檢查實體檔、alias 與父目錄的擁有者／寫入權限。
+
+### 獨立 FPM 驗收
+
+上述按鈕及 `php` 命令只驗 CLI。FPM 設定套用成功後，可以用 root 在 Unix socket 上執行相同完整 workload，無須建立公開網站測試頁。以下使用發行包既有 Python 與 FastCGI helper；只建立暫存 PHP wrapper，完成或失敗均清理，不覆寫任何 PHP 設定。
+
+```sh
+cd /opt/3waServerSetting/current
+/opt/3waServerSetting/current/.venv/bin/python - <<'PY'
+import json, os, socket, tempfile
+from pathlib import Path
+from server_setting.root_actions import RootManager
+from server_setting.root_recipes import _fpm, _trusted_fpm_path
+from server_setting.root_fpm import _exchange
+from server_setting.diagnostics import _trusted_spatialite_module
+
+core = RootManager()
+core._gate('php')
+target = _fpm(core.host)
+module = _trusted_spatialite_module('/var/www/sqlite3_ext/mod_spatialite.so')
+library = (Path.cwd() / 'tests/sqlite-smoke.php').resolve(strict=True)
+_trusted_fpm_path(core.host, library)
+source = ("<?php\ndefine('THREEWA_SQLITE_LIBRARY_ONLY', true);\nrequire "
+          + json.dumps(str(library)) + ";\n$module=" + json.dumps(module) + ";\n"
+          + "header('Content-Type: application/json');\n"
+          + "echo json_encode(['sapi'=>PHP_SAPI,'values'=>['results'=>["
+          + "spatialite_acceptance('pdo',$module),spatialite_acceptance('sqlite3',$module)]]]);\n")
+directory = Path(tempfile.mkdtemp(prefix='3wa-spatialite-fpm-', dir='/run'))
+script = directory / 'probe.php'
+try:
+    os.chmod(directory, 0o711)
+    script.write_text(source, encoding='utf-8')
+    os.chmod(script, 0o644)
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
+        connection.settimeout(300)
+        connection.connect(target['socket'])
+        report = _exchange(connection, str(script))
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+    passed = (report.get('sapi') == 'fpm-fcgi'
+              and len(report['values'].get('results', [])) == 2
+              and all(row.get('status') == 'PASS' for row in report['values']['results']))
+    raise SystemExit(0 if passed else 1)
+finally:
+    script.unlink(missing_ok=True)
+    directory.rmdir()
+PY
+```
+
+預期 `sapi=fpm-fcgi`，兩個 `results` 分別為 PDO、SQLite3，皆 PASS、各 30,000 筆；任一缺 driver、gate、模組或設定有誤即失敗。wrapper 不使用 `ini_set()` 或 FastCGI `PHP_VALUE` 偷補目標值。這項仍不等同 Apache/vhost/網站應用的 HTTP 驗收。
+
+## 快速檢查參數與限制
+
 不依賴網站、routing_config.php、道路資料或現有DB。各項使用獨立 sqlite::memory: 連線；不改PRAGMA、PHP設定或系統。RTree即使SpatiaLite失敗也會驗證。
 
 ```sh

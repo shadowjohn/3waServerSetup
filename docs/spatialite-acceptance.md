@@ -24,7 +24,7 @@ php tests/sqlite-smoke.php --acceptance --module=/var/www/sqlite3_ext/mod_spatia
 
 發行包沿用既有 `tests/sqlite-smoke.php` 路徑，讓已安裝的 `2026.10.26.003` 更新器可直接驗證、更新。沒有 `--acceptance` 時維持原快速檢查。Git 原始碼另保留 `tests/spatialite-acceptance.php` wrapper，呼叫相同實作；它不額外放入發行包。套件頁只負責安裝官方模組，下面的 VM 目錄／ini 設定不會由程式更新自動套用。
 
-SQLite 頁的既有快速檢查仍不接收原生模組路徑；無模組時顯示 SpatiaLite UNVERIFIED。上述完整驗收是另一個明確指定模組的入口。CLI 通過不代表 FPM 通過，兩者必須分開實跑。
+SQLite 頁的 `Run PDO + RTree` 不載入原生模組；無模組時顯示 SpatiaLite UNVERIFIED。root 模式另提供明確指定可信模組的 `Test SQL + spatial` 與 `Full 30k / driver`，分別使用既有快速 SQL 路線及上述完整驗收入口。CLI 通過不代表 FPM 通過，兩者必須分開實跑。新主機操作次序與錯誤對照見 [SQLite 驗收流程](sqlite-smoke.md)。
 
 ## Ubuntu 26.04 實測
 

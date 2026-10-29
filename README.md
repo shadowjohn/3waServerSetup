@@ -1,6 +1,6 @@
 # 3waServerSetup
 
-3waServerSetting Linux終端架站／維運工具。Ubuntu 26.04 的 root 模式提供 Apache、PHP-FPM、vsftpd、Samba、MariaDB 與時區的安裝、推薦設定、自訂配方儲存／套用及最近設定還原，另有 Startup 開機腳本、APT 更新／升級、套件勾選安裝、羽山版 PDO SQLite、雙棧防火牆、BanIP、Swap 與根 LV 擴容；操作方式見[Root 管理](docs/root-management.md)。一般帳號維持[唯讀Textual介面](docs/tui-readonly.md)。
+3waServerSetting Linux終端架站／維運工具。Ubuntu 26.04 的 root 模式提供 Apache、PHP CLI／FPM、vsftpd、Samba、MariaDB、SSH keepalive 與時區的安裝、推薦設定、自訂配方儲存／套用及最近設定還原，另有 Startup 開機腳本、APT 更新／升級、套件勾選安裝、羽山版 PDO SQLite、雙棧防火牆、BanIP、Swap 與根 LV 擴容；操作方式見[Root 管理](docs/root-management.md)。一般帳號維持[唯讀Textual介面](docs/tui-readonly.md)。
 
 可先執行 `python -m server_setting --text` 或 `--status-json`；依賴已存在時執行 `python -m server_setting`／`sh run.sh`。啟動只觀察本機；root 修改須從服務頁檢閱確認，或使用明確的 `--root-* ... --confirm`。launcher 不自動安裝依賴或連線其他主機。
 
@@ -15,6 +15,7 @@ MariaDB 新增獨立的 [root 密碼與外連 On／Off](docs/mariadb-root-access
 - [APT 套件勾選安裝](docs/apt-install.md)、[羽山版 PDO SQLite 編譯／啟用／還原](docs/php-feather.md)、[手動更新 BanIP](docs/banip-root.md)
 - [Startup 開機腳本：設定／儲存／套用／立即執行／還原](docs/startup-root.md)
 - [尚未完成的功能與驗收](docs/remaining-work.md)
+- [Apache event／PHP-FPM 切換與還原](docs/apache-fpm.md)、[Ubuntu 26.04 新機驗收](docs/ubuntu26-fresh-validation.md)
 - [Release 安裝與更新規格](docs/release-distribution.md)
 - [離線防火牆候選](docs/firewall-offline.md)：只支援IPv4 INPUT，無apply；不可直接導入iptables-restore。
 - [PDO SQLite／SQLite3 RTree／SpatiaLite CLI測試](docs/sqlite-smoke.md)、[SpatiaLite 雙驅動 30,000 筆驗收](docs/spatialite-acceptance.md)

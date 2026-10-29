@@ -9,6 +9,7 @@ import re
 import stat
 
 from .root_actions import RootActionError, _fingerprint
+from .operation_progress import phase_context
 
 UPGRADE = ['apt-get', '--with-new-pkgs', '--no-remove',
            '-o', 'Dpkg::Options::=--force-confdef', '-o', 'Dpkg::Options::=--force-confold']
@@ -81,7 +82,7 @@ def plan(manager, operation):
     command = ['apt-get', '--error-on=any', 'update']
     if operation == 'upgrade':
         simulation = manager.host.run([*UPGRADE, '--simulate', 'upgrade'], timeout=900)
-        if simulation.returncode:
+        if simulation.returncode or getattr(simulation, 'output_truncated', False):
             raise RootActionError('APT upgrade simulation failed; no upgrade was started.', 'APT_SIMULATION_FAILED')
         packages, kept_back = _simulation(simulation.stdout)
         command = [*UPGRADE, '--yes', 'upgrade']
@@ -116,7 +117,8 @@ def run(manager, preview):
                    'kept_back': trusted['kept_back']}
         manager._journal(journal)
         try:
-            completed = manager.host.run(trusted['command'], timeout=900)
+            with phase_context('apt-' + trusted['operation']):
+                completed = manager.host.run(trusted['command'], timeout=900)
             if completed.returncode:
                 raise RootActionError('APT reported a nonzero exit status.', 'APT_FAILED')
         except Exception:

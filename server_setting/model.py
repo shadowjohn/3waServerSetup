@@ -12,15 +12,18 @@ FIELDS = {
             'upload_max_filesize': '64M', 'date.timezone': 'Asia/Taipei',
             'session.upload_progress.enabled': 'Off', 'expose_php': 'Off'},
     'vsftpd': {'anonymous_enable': 'NO', 'local_enable': 'YES', 'write_enable': 'YES',
-               'pasv_min_port': '60000', 'pasv_max_port': '60100'},
+               'pasv_min_port': '60000', 'pasv_max_port': '60100',
+               'file_open_mode': '0777', 'local_umask': '022', 'listen': 'YES',
+               'listen_ipv6': 'NO', 'xferlog_enable': 'YES', 'xferlog_file': '/var/log/vsftpd.log'},
     'samba': {'security': 'user', 'map to guest': 'Never'},
     'mariadb': {'slow_query_log': '1', 'long_query_time': '1',
                 'log_queries_not_using_indexes': 'OFF'},
+    'ssh': {'ClientAliveInterval': '60', 'TCPKeepAlive': 'yes'},
     'time': {'Timezone': 'Asia/Taipei'},
     'startup': {}, 'storage': {},
 }
-LABELS = {'apache': 'Apache', 'php': 'PHP-FPM', 'vsftpd': 'FTP', 'samba': 'Samba',
-          'mariadb': 'MariaDB', 'time': 'Time', 'startup': 'Startup', 'storage': 'Disk / Swap',
+LABELS = {'apache': 'Apache', 'php': 'PHP CLI/FPM', 'vsftpd': 'FTP', 'samba': 'Samba',
+          'mariadb': 'MariaDB', 'ssh': 'SSH keepalive', 'time': 'Time', 'startup': 'Startup', 'storage': 'Disk / Swap',
           'firewall': 'Firewall', 'sqlite': 'SQLite'}
 
 
@@ -39,8 +42,16 @@ def validate(key, value):
         raise ValueError(f'{key}: unsupported choice')
     if key in {'short_open_tag', 'session.upload_progress.enabled', 'expose_php'} and value not in {'On', 'Off'}:
         raise ValueError(f'{key}: choose On or Off')
-    if key.endswith('_enable') and value not in {'YES', 'NO'}:
+    if (key.endswith('_enable') or key in {'listen', 'listen_ipv6'}) and value not in {'YES', 'NO'}:
         raise ValueError(f'{key}: choose YES or NO')
+    if key in {'file_open_mode', 'local_umask'} and not re.fullmatch(r'0[0-7]{2,3}', value):
+        raise ValueError(f'{key}: expected octal permissions with a leading 0, such as 0777 or 022')
+    if key == 'xferlog_file' and not re.fullmatch(r'/var/log/[A-Za-z0-9][A-Za-z0-9_.-]{0,100}\.log', value):
+        raise ValueError('xferlog_file: expected a plain .log filename directly under /var/log')
+    if key == 'ClientAliveInterval' and (not re.fullmatch(r'0|[1-9][0-9]{0,9}', value) or int(value) > 2147483647):
+        raise ValueError('ClientAliveInterval: expected whole seconds from 0 to 2147483647')
+    if key == 'TCPKeepAlive' and value not in {'yes', 'no'}:
+        raise ValueError('TCPKeepAlive: choose yes or no')
     if key in {'pasv_min_port', 'pasv_max_port'} and (not value.isascii() or not value.isdecimal() or not 1 <= int(value) <= 65535):
         raise ValueError(f'{key}: port must be 1..65535')
     if key in {'date.timezone', 'Timezone'}:
@@ -64,6 +75,8 @@ def preview(module, target, configured):
         validate(key, value)
     if {'pasv_min_port', 'pasv_max_port'} <= target.keys() and int(target['pasv_min_port']) > int(target['pasv_max_port']):
         raise ValueError('PASV minimum exceeds maximum')
+    if module == 'vsftpd' and target.get('listen') == 'YES' and target.get('listen_ipv6') == 'YES':
+        raise ValueError('listen and listen_ipv6 cannot both be YES')
     if module == 'php':
         def size(value):
             return int(value[:-1]) * 1024 ** ('KMG'.index(value[-1].upper()) + 1) if value[-1].upper() in 'KMG' else int(value)

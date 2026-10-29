@@ -357,6 +357,39 @@ def packages_command(args, manager=None):
                               'message': str(error)}, 1)
 
 
+def apache_fpm_command(args, manager=None, root_manager=None):
+    operation = next(name for name in ('status', 'plan', 'apply', 'restore')
+                     if getattr(args, 'apache_fpm_' + name))
+    if not root_management_available():
+        return json_response({'status': 'DENIED', 'code': 'ROOT_REQUIRED', 'module': 'apache-fpm',
+                              'message': 'Apache event/FPM management requires root on Ubuntu 26.04.'}, 1)
+    if operation in {'apply', 'restore'} and not args.confirm:
+        return json_response({'status': 'ERROR', 'code': 'CONFIRMATION_REQUIRED', 'module': 'apache-fpm',
+                              'message': 'Apache event/FPM integration and restore require --confirm.'}, 2)
+    try:
+        if manager is None:
+            from .root_apache import ApacheFPMManager
+            manager = ApacheFPMManager(root_manager=root_manager)
+        if operation == 'status':
+            result = manager.status()
+            return json_response(result, 0 if result.get('supported') is True else 1)
+        if operation == 'plan':
+            return json_response({'status': 'PLANNED', 'module': 'apache-fpm', 'plan': manager.plan()})
+        if operation == 'restore':
+            result = manager.restore(manager.restore_plan())
+        else:
+            result = manager.apply(manager.plan())
+        expected = 'APACHE_FPM_RESTORED' if operation == 'restore' else 'APACHE_FPM_APPLIED'
+        return json_response(result, 0 if result.get('status') in {expected, 'NO_CHANGE'} else 1)
+    except Exception as error:
+        from .root_actions import RootActionError
+        code = getattr(error, 'code', 'APACHE_FPM_FAILED')
+        if not isinstance(code, str) or not re.fullmatch(r'[A-Z][A-Z0-9_]{0,63}', code):
+            code = 'APACHE_FPM_FAILED'
+        message = str(error) if isinstance(error, RootActionError) else 'Apache event/FPM operation failed; inspect its transaction and native service state.'
+        return json_response({'status': 'FAILED', 'code': code, 'module': 'apache-fpm', 'message': message}, 1)
+
+
 def php_feather_command(args, manager=None):
     operation = next(name for name in ('status', 'plan', 'apply', 'restore') if getattr(args, 'php_feather_' + name))
     if not root_management_available():
@@ -536,7 +569,7 @@ def network_command(args, manager=None):
                               'message':'Network operation failed. Read network status for pending recovery instructions.'}, 1)
 
 
-def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None, network_manager=None):
+def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, swap_manager=None, banip_manager=None, package_manager=None, php_feather_manager=None, startup_manager=None, release_manager=None, network_manager=None, apache_fpm_manager=None):
     parser = CommandParser(description='3waServerSetting local console and explicit root operations')
     identity = version_info()
     parser.add_argument('--version', action='version', version=f'{identity["version"]} / commit {identity["commit"]} / {identity["channel"]}')
@@ -575,6 +608,8 @@ def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, 
         root_modes.add_argument('--packages-' + operation, nargs='+', metavar='PACKAGE')
     for operation in ('status', 'plan', 'apply', 'restore'):
         root_modes.add_argument('--php-feather-' + operation, action='store_true')
+    for operation in ('status', 'plan', 'apply', 'restore'):
+        root_modes.add_argument('--apache-fpm-' + operation, action='store_true')
     for operation in ('status', 'load', 'plan', 'save', 'apply', 'run', 'restore'):
         root_modes.add_argument('--startup-' + operation, action='store_true')
     parser.add_argument('--startup-config', metavar='FILE', help='Startup schema1 JSON; - reads at most 1 MiB from stdin')
@@ -618,6 +653,7 @@ def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, 
         is_packages_command = args.packages_catalog or any(getattr(args, 'packages_' + operation) is not None
                                                           for operation in ('search', 'plan', 'install'))
         is_feather_command = any(getattr(args, 'php_feather_' + operation) for operation in ('status', 'plan', 'apply', 'restore'))
+        is_apache_fpm_command = any(getattr(args, 'apache_fpm_' + operation) for operation in ('status', 'plan', 'apply', 'restore'))
         is_startup_command = any(getattr(args, 'startup_' + operation) for operation in ('status', 'load', 'plan', 'save', 'apply', 'run', 'restore'))
         is_update_command = any(getattr(args, 'update_' + operation) for operation in ('status', 'check', 'plan', 'apply', 'rollback'))
         is_network_command = any(getattr(args, 'network_'+operation) for operation in ('status', 'load', 'save', 'plan', 'apply')) or args.network_confirm is not None or args.network_recover is not None
@@ -638,6 +674,12 @@ def main(argv=None, root_manager=None, firewall_manager=None, lvm_manager=None, 
             raise ValueError('--config requires a firewall plan/save/apply operation')
         if not is_security_command and (args.remote is not None or args.change_root_password or args.password_stdin):
             raise ValueError('MariaDB security options require --mariadb-security-plan/apply')
+        if is_apache_fpm_command:
+            if (args.status_json or args.text or args.plain or args.smoke or args.ascii
+                    or args.values is not None or args.service_active is not None or args.service_enabled is not None
+                    or (args.apache_fpm_status or args.apache_fpm_plan) and args.confirm):
+                raise ValueError('Apache event/FPM operations accept only their explicit mode and --confirm for apply/restore')
+            return apache_fpm_command(args, apache_fpm_manager, root_manager)
         if is_network_command:
             if (args.status_json or args.text or args.plain or args.smoke or args.values is not None
                     or args.service_active is not None or args.service_enabled is not None):

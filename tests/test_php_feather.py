@@ -246,6 +246,14 @@ class FeatherTests(unittest.TestCase):
 
     def test_real_builder_and_engine_status_plan_share_the_live_contract(self):
         from server_setting.php_feather_build import FeatherBuilder
+        import server_setting.php_feather_build as build_module
+        worker_bytes=Path(build_module.__file__).resolve().read_bytes()
+        worker=self.root/'opt/fixture-code/server_setting/php_feather_build.py'
+        worker.parent.mkdir(parents=True)
+        worker.write_bytes(worker_bytes);worker.chmod(0o644)
+        for parent in [worker.parent,*worker.parent.parents]:
+            parent.chmod(0o755)
+            if parent==self.root:break
         native={**self.builder.status()['native'],'debug':False,'source_package':'php8.5',
                 'sqlite_package_version':'3.46.1-9ubuntu0.3','extension_dir':'/usr/lib/php/20250925',
                 'original_module':'/usr/lib/php/20250925/pdo_sqlite.so',
@@ -267,7 +275,9 @@ class FeatherTests(unittest.TestCase):
                     'command':['apt-get','--no-upgrade','--no-remove','--simulate','install','--',*sorted(names)]}
                 result['fingerprint']=_fingerprint(result);return result
         real=FeatherBuilder(self.host)
-        with patch.object(real,'_packages',return_value=PackagesBoundary()):
+        with patch.object(real,'_packages',return_value=PackagesBoundary()), \
+             patch.object(build_module,'WORKER_FILE',worker), \
+             patch.object(build_module,'_WORKER_SOURCE_SHA256',hashlib.sha256(worker_bytes).hexdigest()):
             engine=FeatherSQLiteManager(self.host,builder=real)
             with patch.object(engine,'_fpm_target',return_value=self.manager._fpm_target()):
                 self.assertEqual(real.status()['native']['package_version'],self.package_version)

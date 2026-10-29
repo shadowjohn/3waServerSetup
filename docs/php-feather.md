@@ -1,5 +1,7 @@
 # 羽山版 PDO SQLite
 
+編譯 worker 跟隨目前執行版本的實體檔案路徑，並將路徑與 source SHA256 放入檢閱指紋；新 Release 不再依賴舊工作樹的 `/opt/3waServerSetting/server_setting/php_feather_build.py`。啟動 worker 前會檢查 root 控制權與來源未變；版本切換後須重新開啟程式，不會在編譯中追隨另一個 `current` 目標。
+
 `Install packages` 頁下方提供獨立的羽山版編譯與啟用區。目標是讓既有 PDO 程式直接透過 SQL `SELECT load_extension(...)` 載入 SQLite 原生 `.so`，不需在應用程式加入新的 PDO constructor option。
 
 Root 可分別勾選 CLI、FPM，先檢閱再執行編譯與啟用。未勾選的範圍保留現況。只支援目前已核對的 Ubuntu 26.04、單一 PHP 8.5 NTS／amd64 ABI 20250925 與單一 www FPM pool；不猜測其他 PHP／pool 的路徑。
