@@ -29,6 +29,12 @@ FINAL={'APPLIED','ROLLED_BACK'}
 LIMIT=1024*1024
 PROC_LIMIT=8192
 CLIENT_NAMES={'dhcpcd','dhclient','udhcpc','connman','connmand','networkmanager'}
+DRACUT_FALLBACK='/run/systemd/network/zzzz-dracut-default.network'
+DRACUT_TEMPLATE='/usr/lib/dracut/modules.d/11systemd-networkd/dracut-default.network'
+DRACUT_PRODUCER='/usr/lib/dracut/modules.d/11systemd-networkd/networkd-config.sh'
+DRACUT_BYTES=(b'[Match]\nKind=!*\nType=!loopback\n\n[Network]\nDHCP=yes\n\n[DHCPv4]\n'
+              b'ClientIdentifier=mac\nRequestOptions=17\n\n[DHCPv6]\nRequestOptions=59 60\n')
+NETPLAN_BACKEND=re.compile(r'[0-9]+-netplan-[A-Za-z0-9_.-]+\.(network|netdev)')
 
 
 class NetworkError(RuntimeError):
@@ -42,7 +48,7 @@ def ticks():return int(now()*(os.sysconf('SC_CLK_TCK') if hasattr(os,'sysconf') 
 
 
 def native_run(argv,timeout=30):
-    if (not isinstance(argv,(list,tuple)) or not argv or argv[0] not in {'netplan','ip','resolvectl','systemctl','python3','findmnt','systemd-run'}
+    if (not isinstance(argv,(list,tuple)) or not argv or argv[0] not in {'netplan','ip','resolvectl','systemctl','python3','findmnt','systemd-run','networkctl'}
             or any(not isinstance(v,str) or '\x00' in v for v in argv) or not 0<timeout<=180):
         raise NetworkError('Invalid bounded network command.')
     executable=shutil.which(argv[0],path=SAFE_PATH)
@@ -51,8 +57,10 @@ def native_run(argv,timeout=30):
         metadata=path.stat()
         if metadata.st_uid!=0 or metadata.st_mode&0o022:raise NetworkError('Network executable is not root controlled.')
     try:
+        # Netplan 1.2 requests root:systemd-network 0640 backend files; 0077
+        # would strip their group read bit and make networkd unable to read them.
         result=subprocess.run([executable,*argv[1:]],stdin=subprocess.DEVNULL,capture_output=True,text=True,
-            encoding='utf-8',errors='strict',timeout=timeout,shell=False,umask=0o077,
+            encoding='utf-8',errors='strict',timeout=timeout,shell=False,umask=0o022 if argv[0]=='netplan' else 0o077,
             env={'PATH':SAFE_PATH,'HOME':'/root','LANG':'C','LC_ALL':'C','SYSTEMD_PAGER':'cat'})
     except (OSError,subprocess.TimeoutExpired):raise NetworkError('Network command failed or timed out.') from None
     if len(result.stdout)+len(result.stderr)>4*LIMIT:raise NetworkError('Network output exceeds its bound.')
@@ -313,13 +321,78 @@ class Runtime:
                     absolute=directory+'/'+item.name;result[absolute]=self.snapshot(absolute)
         return result
 
+    def backend_dependencies(self,interface,require_effective=True):
+        """Recognize an unchanged, inactive dracut fallback without editing it.
+
+        Generated Netplan files may change during a trial. Other backend inputs
+        are pinned, including vendor filenames, so newly appearing overrides
+        cannot silently enter an already reviewed transaction.
+        """
+        if not isinstance(interface,str) or not re.fullmatch(r'[a-zA-Z0-9][a-zA-Z0-9_.-]{0,14}',interface):
+            raise NetworkError('Invalid selected network interface.')
+        result={};count=0;generated=set();fallback=False
+        for directory in ('/etc/systemd/network','/run/systemd/network',
+                          '/usr/lib/systemd/network','/usr/local/lib/systemd/network'):
+            path=self.path(directory)
+            if not path.exists():continue
+            self.trusted(path,directory=True)
+            vendor=directory.startswith('/usr/')
+            items=[]
+            for item in path.iterdir():
+                count+=1
+                if count>1024:raise NetworkError('Backend network inventory exceeds its inspection bound.')
+                items.append(item)
+            for item in sorted(items):
+                absolute=directory+'/'+item.name
+                if item.name.endswith(('.network.d','.netdev.d')):
+                    # Even an empty relevant drop-in directory changes backend
+                    # ownership; do not guess how a later fragment will merge.
+                    basename=item.name[:-2]
+                    relevant=not vendor or NETPLAN_BACKEND.fullmatch(basename) or basename==Path(DRACUT_FALLBACK).name
+                    if relevant:raise NetworkError('Backend network drop-ins require separate integration.')
+                    self.trusted(self.path(absolute),directory=True)
+                    children=[]
+                    for child in item.iterdir():
+                        count+=1
+                        if count>1024:raise NetworkError('Backend network inventory exceeds its inspection bound.')
+                        children.append(child)
+                    for child in sorted(children):
+                        if child.name.endswith('.conf'):result[absolute+'/'+child.name]=self.snapshot(absolute+'/'+child.name)
+                    continue
+                if item.suffix not in {'.network','.netdev'}:continue
+                snapshot=self.snapshot(absolute)
+                if absolute==DRACUT_FALLBACK:
+                    if self.read(absolute)!=DRACUT_BYTES:raise NetworkError('The dracut fallback differs from its supported standard template.')
+                    fallback=True;result[absolute]=snapshot
+                elif vendor:
+                    if NETPLAN_BACKEND.fullmatch(item.name) or item.name==Path(DRACUT_FALLBACK).name:
+                        raise NetworkError('Vendor overrides for the selected network backend require separate integration.')
+                    result[absolute]=snapshot
+                elif directory=='/run/systemd/network' and NETPLAN_BACKEND.fullmatch(item.name):
+                    generated.add(absolute)
+                else:raise NetworkError('Custom backend network files require separate integration.')
+        if fallback:
+            if self.read(DRACUT_TEMPLATE)!=DRACUT_BYTES:
+                raise NetworkError('The root-controlled dracut vendor template is missing or changed.')
+            if not self.read(DRACUT_PRODUCER):raise NetworkError('The installed dracut network producer is unavailable.')
+            result[DRACUT_TEMPLATE]=self.snapshot(DRACUT_TEMPLATE)
+            result[DRACUT_PRODUCER]=self.snapshot(DRACUT_PRODUCER)
+            if require_effective:
+                text=self.checked(['networkctl','--no-pager','--full','--lines=0','status',interface],timeout=5)
+                selected=re.findall(r'^\s*Network File:\s*(\S+)\s*$',text,re.MULTILINE)
+                if (len(selected)!=1 or selected[0] not in generated
+                        or not re.fullmatch(r'/run/systemd/network/[0-9]+-netplan-'+re.escape(interface)+r'\.network',selected[0])
+                        or Path(selected[0]).name>=Path(DRACUT_FALLBACK).name):
+                    raise NetworkError('The selected interface must already use its Netplan network file; the dracut fallback cannot be taken over.')
+        return result
+
     def owned_overlay(self,journal):
         raw=self.read(journal['overlay'])
         if raw is not None and digest(raw)!=journal['file_hashes']['candidate.yaml']:
             raise NetworkError('An external volatile Netplan edit blocks recovery.')
         return raw is not None
 
-    def check_source(self,journal,allow_committed=False):
+    def check_source(self,journal,allow_committed=False,require_effective=True):
         source=journal['source'];actual=self.snapshot(source['path'])
         before=source['snapshot']
         after=dict(before,sha256=journal['file_hashes']['candidate.yaml'],size=journal['candidate_size'],
@@ -332,6 +405,10 @@ class Runtime:
         if current!=expected:raise NetworkError('The Netplan file hierarchy changed externally.')
         for absolute,snapshot in journal.get('dependencies',{}).items():
             if self.snapshot(absolute)!=snapshot:raise NetworkError('Network ownership inputs changed externally.')
+        if 'backend_dependencies' in journal:
+            effective=require_effective and (not journal.get('boot_id') or journal['boot_id']==self.boot_id())
+            if self.backend_dependencies(journal['config']['interface'],require_effective=effective)!=journal['backend_dependencies']:
+                raise NetworkError('Backend network ownership inputs changed externally.')
         self.owned_overlay(journal)
         return actual==after
 
@@ -346,9 +423,29 @@ class Runtime:
         dns=self.checked(['resolvectl','dns',interface],timeout=5).split(':',1)[-1].strip().split()
         try:dns=[str(ipaddress.ip_address(v)) for v in dns]
         except ValueError:raise NetworkError('Link DNS observation is unavailable.') from None
+        disabled=self.read('/proc/sys/net/ipv6/conf/'+interface+'/disable_ipv6')
+        if disabled is not None and disabled.strip() not in {b'0',b'1'}:raise NetworkError('The selected IPv6 kernel policy is ambiguous.')
+        observed6=True
+        try:
+            rows6=json.loads(self.checked(['ip','-j','-6','address','show','dev',interface],timeout=5))
+            addresses6=[v for row in rows6 for v in row.get('addr_info',[]) if v.get('family')=='inet6']
+            routes6=json.loads(self.checked(['ip','-j','-6','route','show','table','all'],timeout=5))
+            routes6=[{k:v[k] for k in ('dst','gateway','dev','metric','protocol','scope') if k in v}
+                     for v in routes6 if v.get('dev')==interface]
+        except NetworkError:
+            if disabled is not None:raise
+            # A kernel without IPv6 must retain the old IPv4-only path. It does
+            # not provide evidence for a newly requested IPv6 policy, however.
+            addresses6=[];routes6=[];observed6=False
+        ready6=any(ipaddress.IPv6Address(v['local']).is_link_local
+                   and not v.get('tentative') and not v.get('dadfailed')
+                   and not {'tentative','dadfailed'}&set(v.get('flags',[])) for v in addresses6)
         return {'addresses':[v['local']+'/'+str(v['prefixlen']) for v in addresses],
             'dynamic':[v['local'] for v in addresses if v.get('dynamic')], 'routes':routes,'dns':dns,
-            'mac':selected[0].get('address','').lower()}
+            'mac':selected[0].get('address','').lower(),
+            'ipv6_addresses':[v['local']+'/'+str(v['prefixlen']) for v in addresses6],
+            'ipv6_routes':routes6,'ipv6_disabled':None if disabled is None else disabled.strip()==b'1',
+            'ipv6_link_local_ready':ready6,'ipv6_observed':observed6}
 
     def check_runtime(self,journal,config=None,observed=None):
         config=config or journal['config'];value=observed if observed is not None else self.observed(config['interface'])
@@ -378,6 +475,17 @@ class Runtime:
             gateway_host=network.prefixlen==32 and str(network.network_address) in gateways and not route.get('gateway')
             if not (connected or gateway_host):raise NetworkError('Unmanaged IPv4 routes require separate support.')
         if not set(config['dns'])<=set(value['dns']):raise NetworkError('Target manual DNS is not active.')
+        policy=config.get('ipv6','preserve')
+        if policy=='disabled':
+            if not value.get('ipv6_observed',True):raise NetworkError('IPv6 state is unavailable on the selected interface.')
+            if value.get('ipv6_addresses') or value.get('ipv6_routes'):
+                raise NetworkError('IPv6 is still active on the selected interface.')
+        elif policy=='auto':
+            if value.get('ipv6_disabled') is not False:
+                raise NetworkError('IPv6 is disabled or unavailable in the selected interface kernel policy; no sysctl is changed automatically.')
+            ready=value.get('ipv6_link_local_ready',any(ipaddress.IPv6Interface(v).ip.is_link_local for v in value.get('ipv6_addresses',[])))
+            if not ready:raise NetworkError('Automatic IPv6 link-local addressing is not ready on the selected interface.')
+        elif policy!='preserve':raise NetworkError('Unknown IPv6 policy.')
         return target,value
 
     @staticmethod
@@ -458,7 +566,10 @@ class Runtime:
             value=self.journal(identifier);self.artifacts(value)
             if value['status'] in FINAL:return value
             confirming=value['status']=='NETWORK_CONFIRMING'
-            committed=self.check_source(value,allow_committed=confirming)
+            # Restoring the last known source must work while networkd is
+            # unhealthy. File hierarchy, contents and ownership remain pinned;
+            # only the live NetworkFile query is skipped for this restore path.
+            committed=self.check_source(value,allow_committed=confirming,require_effective=False)
             if committed:
                 proof=value.get('confirmation')
                 if (not confirming or not isinstance(proof,dict) or digest(encoded(proof))!=value.get('confirmation_sha256')

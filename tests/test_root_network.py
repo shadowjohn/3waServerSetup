@@ -1,6 +1,7 @@
 """Real private files; fake only netplan/systemd/kernel/SSH boundaries."""
 import copy
 from contextlib import contextmanager
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -30,6 +31,7 @@ class NetworkTests(unittest.TestCase):
         for name, content in {'etc/os-release':'ID=ubuntu\nVERSION_ID="24.04"\n',
                 'etc/cloud/cloud.cfg.d/90-installer-network.cfg':'{"network":{"config":"disabled"}}',
                 'proc/sys/kernel/random/boot_id':'test-boot', 'proc/cmdline':'quiet',
+                'proc/sys/net/ipv6/conf/eth0/disable_ipv6':'0\n',
                 'sys/class/net/eth0/address':'00:15:5d:01:6a:02'}.items():
             path = self.root/name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -39,6 +41,8 @@ class NetworkTests(unittest.TestCase):
         self.address = '192.168.137.192/24'
         self.dns = ['192.168.137.1']
         self.gateway = '192.168.137.1'
+        self.ipv6_addresses = ['fe80::215:5dff:fe01:6a02/64']
+        self.ipv6_routes = []
         self.fail_generate = self.fail_apply = self.fail_arm = False
         self.boot = 'test-boot'
         self.proof = {'caller_pid':os.getpid(),'caller_start_ticks':1,'transport_pid':111,
@@ -58,6 +62,15 @@ class NetworkTests(unittest.TestCase):
                         output=json.dumps([{'ifname':'eth0','ifindex':2,'addr_info':[{'family':'inet','scope':'global','local':ip,'prefixlen':int(prefix),'dynamic':outer.address.startswith('192.168.137.192')}]}])
                     else:
                         output=json.dumps([{'dst':'default','gateway':outer.gateway,'dev':'eth0'}] if outer.gateway else [])
+                elif argv[:3]==['ip','-j','-6']:
+                    if 'address' in argv:
+                        addresses=[]
+                        for value in outer.ipv6_addresses:
+                            ip,prefix=value.split('/')
+                            addresses.append({'family':'inet6','scope':'link' if ipaddress.ip_address(ip).is_link_local else 'global',
+                                'local':ip,'prefixlen':int(prefix)})
+                        output=json.dumps([{'ifname':'eth0','ifindex':2,'addr_info':addresses}])
+                    else:output=json.dumps(outer.ipv6_routes)
                 elif argv[0]=='resolvectl':
                     output='Link 2 (eth0): '+' '.join(outer.dns)+'\n'
                 elif argv[0]=='findmnt': output='tmpfs\n'
@@ -71,9 +84,15 @@ class NetworkTests(unittest.TestCase):
                     else:
                         overlay=outer.root/'run/netplan/50-cloud-init.yaml'
                         value=json.loads((overlay if overlay.exists() else outer.source).read_bytes())['network']['ethernets']['eth0']
-                        outer.address='192.168.137.192/24' if value.get('dhcp4') else value['addresses'][0]
-                        outer.gateway=(value.get('routes') or [{}])[0].get('via','192.168.137.1' if value.get('dhcp4') else '')
+                        outer.address='192.168.137.192/24' if value.get('dhcp4') else next(v for v in value['addresses'] if ':' not in v)
+                        routes=[route for route in value.get('routes',[]) if ':' not in str(route.get('via','')) and ':' not in str(route.get('to',''))]
+                        outer.gateway=(routes or [{}])[0].get('via','192.168.137.1' if value.get('dhcp4') else '')
                         outer.dns=value.get('nameservers',{}).get('addresses',['192.168.137.1'] if value.get('dhcp4') else [])
+                        outer.ipv6_addresses=[v for v in value.get('addresses',[]) if ':' in v]
+                        if 'ipv6' in value.get('link-local',['ipv6']):outer.ipv6_addresses.append('fe80::215:5dff:fe01:6a02/64')
+                        (outer.root/'proc/sys/net/ipv6/conf/eth0/disable_ipv6').write_text('0\n' if outer.ipv6_addresses else '1\n')
+                        outer.ipv6_routes=[{'dst':route['to'],'gateway':route['via'],'dev':'eth0'} for route in value.get('routes',[])
+                            if ':' in str(route.get('via',''))]
                 elif argv[0]=='systemd-run':
                     unit=next(value.split('=',1)[1] for value in argv if value.startswith('--unit='))
                     if unit in outer.units:return subprocess.CompletedProcess(argv,1,'','unit already exists')
@@ -140,7 +159,7 @@ class NetworkTests(unittest.TestCase):
     def test_save_only_private_draft(self):
         before=self.source.read_bytes()
         self.assertEqual(self.manager.save(self.config)['status'],'SAVED')
-        self.assertEqual(self.manager.load_saved(),self.config)
+        self.assertEqual(self.manager.load_saved(),dict(self.config,ipv6='preserve'))
         self.assertEqual(self.source.read_bytes(),before)
         self.assertFalse(any(e[0]=='netplan' for e in self.events))
 

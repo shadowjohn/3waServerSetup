@@ -8,7 +8,9 @@ MariaDB 新增獨立的 [root 密碼與外連 On／Off](docs/mariadb-root-access
 
 新主機使用 GitHub Release 的安裝器；開發才 clone。安裝、明確檢查更新與程式回退見[安裝與更新操作](docs/installation.md)。版號採 `YYYY.MM.DD.NNN`，例如 `2026.10.25.001`；發布包附固定公鑰驗證的簽章 manifest、完整檔案 hash 與鎖定 wheels。啟動不自動連網更新，主機設定／備份／編譯模組留在版本目錄外。
 
-新增 [主網卡 DHCP／固定 IP](docs/network-settings.md)：Ubuntu 22.04／24.04／26.04 可編輯 IPv4 CIDR、gateway 與三組 DNS，草稿和套用分開。候選先暫存試用，120 秒內從新 IP 的新 SSH 確認後才永久儲存；原連線消失仍有獨立回復保護。
+新增 [主網卡 DHCP／固定 IP 與 IPv6](docs/network-settings.md)：Ubuntu 22.04／24.04／26.04 可編輯 IPv4 CIDR、gateway、三組 DNS及 IPv6 保留／自動／關閉政策，草稿和套用分開。支援經核對為非生效設定的 Ubuntu dracut 標準 fallback，保留未知 backend 的保護。候選先暫存試用，120 秒內從目標 IPv4 的新 SSH 確認後才永久儲存；原連線消失仍有獨立回復保護。
+
+**此開發分支的 IPv6／dracut 套用驗收尚未完成。** 舊候選在測試 VM 發生連線中斷，目前正處理復原；檔案權限相容修正已補上，尚待實機重驗。請先看[驗收與交接紀錄](docs/network-ipv6-validation.md)，不要當作已發布版本。
 
 - [總設計與8bit看板娘提案](docs/design.md)
 - [防火牆來源與 SSH 回復保護](docs/firewall-root.md)、[Swap 容量／啟停／fstab](docs/swap-root.md)、[根 LV 擴容](docs/root-lvm.md)

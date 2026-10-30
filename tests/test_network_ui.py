@@ -8,9 +8,9 @@ import unittest
 from unittest.mock import patch
 
 
-DHCP = {'interface':'eth0','mode':'dhcp','address':'','gateway':'','dns':[]}
+DHCP = {'interface':'eth0','mode':'dhcp','address':'','gateway':'','dns':[], 'ipv6':'preserve'}
 STATIC = {'interface':'eth0','mode':'static','address':'192.168.137.24/24','gateway':'192.168.137.1',
-          'dns':['1.1.1.1','8.8.8.8','2606:4700:4700::1111']}
+          'dns':['1.1.1.1','8.8.8.8','2606:4700:4700::1111'], 'ipv6':'preserve'}
 COMMAND = '/opt/3waServerSetting/run.sh --network-confirm network-fixture --confirm'
 
 
@@ -189,6 +189,29 @@ class NetworkUiTests(unittest.IsolatedAsyncioTestCase):
             await self.button(app,pilot,'network-save');await self.until(pilot,lambda:not app.root_busy)
             self.assertEqual([row for row in manager.calls if row[0]=='save'][-1],('save',DHCP))
 
+    async def test_ipv6_draft_survives_refresh_load_and_review_cancel(self):
+        from textual.widgets import Select,TabbedContent,TextArea
+        manager=NetworkFixture();manager.current.pop('ipv6')
+        app=self.application(manager)
+        async with app.run_test(size=(100,32)) as pilot:
+            await pilot.pause(.1);app.query_one('#pages',TabbedContent).active='tab-network';await pilot.pause(.05)
+            field=app.query_one('#network-ipv6',Select)
+            self.assertEqual(field.value,'preserve')
+            self.assertFalse(field.disabled)
+            field.value='disabled'
+            await self.button(app,pilot,'network-status');await self.until(pilot,lambda:not app.root_busy)
+            self.assertEqual(field.value,'disabled')
+            await self.button(app,pilot,'network-save');await self.until(pilot,lambda:not app.root_busy)
+            self.assertEqual(manager.saved['ipv6'],'disabled')
+            self.assertFalse(any(row[0] in {'plan','apply','confirm'} for row in manager.calls))
+            field.value='auto'
+            await self.button(app,pilot,'network-saved');await self.until(pilot,lambda:not app.root_busy)
+            self.assertEqual(field.value,'disabled')
+            await self.button(app,pilot,'network-apply');await self.until(pilot,lambda:type(app.screen).__name__=='RootReview')
+            self.assertIn('"ipv6": "disabled"',app.screen.query_one('#root-review-detail',TextArea).text)
+            await pilot.press('escape');await self.until(pilot,lambda:not app.root_busy)
+            self.assertFalse(any(row[0] in {'apply','confirm'} for row in manager.calls))
+
     async def test_review_cancel_apply_pending_new_ssh_and_recover_are_separate(self):
         from textual.widgets import Button,TabbedContent,TextArea
         manager=NetworkFixture();app=self.application(manager,updater=True)
@@ -213,24 +236,26 @@ class NetworkUiTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(manager.calls[-2][0],'recover');self.assertFalse(manager.pending)
 
     async def test_nonroot_controls_are_observation_only(self):
-        from textual.widgets import Input,TextArea
+        from textual.widgets import Input,Select,TextArea
         manager=NetworkFixture();app=self.application(manager,root=False)
         async with app.run_test(size=(80,24)) as pilot:
             await pilot.pause(.1)
             for identifier in ('network-save','network-apply','network-recover'):self.assertFalse(app.query('#'+identifier))
             self.assertTrue(app.query_one('#network-address',Input).disabled)
+            self.assertTrue(app.query_one('#network-ipv6',Select).disabled)
             self.assertIn('192.168.137.192',str(app.query_one('#network-live').render()))
             app._begin_network_operation('apply')
             self.assertIn('ROOT_REQUIRED',app.query_one('#out-network',TextArea).text)
             self.assertFalse(any(row[0] in {'plan','save','apply','confirm'} for row in manager.calls))
 
     async def test_pending_and_status_failure_preserve_block_and_draft(self):
-        from textual.widgets import Button,Input,TabbedContent,TextArea
+        from textual.widgets import Button,Input,Select,TabbedContent,TextArea
         manager=NetworkFixture();manager.pending={'transaction_id':'network-fixture','status':'AWAITING_NEW_SSH','remaining_seconds':100,'confirmation_command':COMMAND}
         app=self.application(manager)
         async with app.run_test(size=(80,24)) as pilot:
             await pilot.pause(.1);app.query_one('#pages',TabbedContent).active='tab-network';await pilot.pause(.05)
             self.assertTrue(app.query_one('#network-save',Button).disabled)
+            self.assertTrue(app.query_one('#network-ipv6',Select).disabled)
             self.assertFalse(app.query_one('#network-recover',Button).disabled)
             manager.fail=True
             await self.button(app,pilot,'network-status');await self.until(pilot,lambda:not app.root_busy)

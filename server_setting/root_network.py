@@ -81,13 +81,15 @@ print(json.dumps(value,allow_nan=False))
 
 
 def normalize(config):
-    if not isinstance(config,dict) or set(config)!={'interface','mode','address','gateway','dns'}:
+    fields={'interface','mode','address','gateway','dns'}
+    if not isinstance(config,dict) or set(config) not in (fields,fields|{'ipv6'}):
         raise RootActionError('A complete network configuration is required.','NETWORK_INVALID')
     interface=config['interface'];mode=config['mode'];address=config['address'];gateway=config['gateway'];dns=config['dns']
+    ipv6=config.get('ipv6','preserve')
     if (not isinstance(interface,str) or not _NAME.fullmatch(interface) or not isinstance(mode,str) or mode not in {'dhcp','static'}
             or not isinstance(address,str) or not isinstance(gateway,str) or not isinstance(dns,list) or len(dns)>3
-            or any(not isinstance(v,str) for v in dns)):
-        raise RootActionError('Invalid interface, mode or DNS fields.','NETWORK_INVALID')
+            or any(not isinstance(v,str) for v in dns) or not isinstance(ipv6,str) or ipv6 not in {'preserve','auto','disabled'}):
+        raise RootActionError('Invalid interface, IPv4/IPv6 mode or DNS fields.','NETWORK_INVALID')
     try:
         servers=[str(ipaddress.ip_address(value.strip())) for value in dns if value.strip()]
         if len(servers)!=len(set(servers)):raise ValueError()
@@ -105,7 +107,26 @@ def normalize(config):
                 if route not in network or route in {target.ip,network.network_address,network.broadcast_address}:raise ValueError()
                 gateway=str(route)
     except ValueError:raise RootActionError('Use a valid IPv4 host CIDR, in-subnet gateway and up to three unique DNS IPs.','NETWORK_INVALID') from None
-    return {'interface':interface,'mode':mode,'address':address,'gateway':gateway,'dns':servers}
+    if ipv6=='disabled' and any(ipaddress.ip_address(value).version==6 for value in servers):
+        raise RootActionError('Use IPv4 DNS servers when disabling IPv6 on the primary interface.','NETWORK_IPV6_POLICY')
+    return {'interface':interface,'mode':mode,'address':address,'gateway':gateway,'dns':servers,'ipv6':ipv6}
+
+
+def _ipv6_route(route):
+    return ':' in str(route.get('via','')) or ':' in str(route.get('to',''))
+
+
+def _static_ipv6(node):
+    return ('gateway6' in node or any(isinstance(value,str) and ':' in value for value in node.get('addresses',[]))
+            or any(_ipv6_route(route) for route in node.get('routes',[])))
+
+
+def _ipv6_policy(node):
+    local=node.get('link-local')
+    if not isinstance(local,list) or any(value not in ('ipv4','ipv6') for value in local):return 'preserve'
+    if node.get('dhcp6') is True and node.get('accept-ra') is True and 'ipv6' in local:return 'auto'
+    if node.get('dhcp6') is False and node.get('accept-ra') is False and 'ipv6' not in local and not _static_ipv6(node):return 'disabled'
+    return 'preserve'
 
 
 class NetworkHost(Host):
@@ -175,7 +196,7 @@ class NetworkManager:
     @staticmethod
     def _config(interface,node):
         addresses=[value for value in node.get('addresses',[]) if isinstance(value,str) and ':' not in value]
-        routes=[value for value in node.get('routes',[]) if ':' not in str(value.get('via',''))]
+        routes=[value for value in node.get('routes',[]) if not _ipv6_route(value)]
         if node.get('routing-policy') or len(addresses)>1 or any(value.get('to') not in {'default','0.0.0.0/0'} or set(value)-{'to','via','metric'} for value in routes):
             raise RootActionError('Complex IPv4 addresses and routing require separate support.','NETWORK_UNSUPPORTED')
         if any(not isinstance(value,str) for value in node.get('addresses',[])) or len(routes)>1:
@@ -187,7 +208,7 @@ class NetworkManager:
         return normalize({'interface':interface,'mode':'dhcp' if dhcp else 'static',
             'address':'' if dhcp else (addresses[0] if addresses else ''),
             'gateway':'' if dhcp else node.get('gateway4',(routes[0].get('via','') if routes else '')),
-            'dns':node.get('nameservers',{}).get('addresses',[])})
+            'dns':node.get('nameservers',{}).get('addresses',[]),'ipv6':_ipv6_policy(node)})
 
     def _profile(self,allow_pending=False):
         self._gate()
@@ -223,12 +244,9 @@ class NetworkManager:
                     or not required and props.get('UnitFileState') in {'enabled','enabled-runtime','linked','linked-runtime'}
                     or required and props.get('UnitFileState') in {'masked','masked-runtime','disabled'}):
                 raise RootActionError('The selected NIC must be managed exclusively by active systemd-networkd.','NETWORK_RENDERER')
-        for directory in ('/etc/systemd/network','/run/systemd/network'):
-            path=self.runtime.path(directory)
-            if path.exists():
-                for item in path.iterdir():
-                    if item.suffix in {'.network','.netdev'} and (directory.startswith('/etc/') or not re.fullmatch(r'[0-9]+-netplan-[A-Za-z0-9_.-]+\.(network|netdev)',item.name)):
-                        raise RootActionError('Custom backend network files require separate integration.','NETWORK_CONFLICT')
+        try:backend_dependencies=self.runtime.backend_dependencies(interface)
+        except guard.NetworkError as error:raise RootActionError(str(error),'NETWORK_CONFLICT') from None
+        dependencies.update(backend_dependencies)
         if self.runtime.checked(['findmnt','--noheadings','--output','FSTYPE','--target','/run'],timeout=5).strip()!='tmpfs':
             raise RootActionError('/run must be volatile tmpfs for safe trials.','NETWORK_UNSUPPORTED')
         observed=self.runtime.observed(interface);match=node.get('match',{})
@@ -240,6 +258,7 @@ class NetworkManager:
         if not pending:self.runtime.check_runtime({'mac':observed['mac'],'config':config},observed=observed)
         return {'source':{'path':absolute,'snapshot':snapshot},'inventory':inventory,'dependencies':dependencies,
             'document':value,'config':config,'observed':observed,'interface':interface,'mac':observed['mac'],
+            'backend_dependencies':backend_dependencies,
             'pending':pending[0] if pending else None}
 
     def status(self):
@@ -250,7 +269,7 @@ class NetworkManager:
             pending=known[0] if len(known)==1 else None
             profile=self._profile(allow_pending=True);pending=profile['pending'];config=profile['config']
             if pending:config=pending['config']
-            return {'supported':True,'detail':'Single Ethernet IPv4; trial is volatile until a new target SSH confirms.',
+            return {'supported':True,'detail':'Single Ethernet IPv4 and optional IPv6 policy; trial requires a new target IPv4 SSH confirmation.',
                 'interface':profile['interface'],'interfaces':[profile['interface']],'renderer':'networkd','config':config,
                 'observed':profile['observed'],'source':{'path':profile['source']['path'],'sha256':profile['source']['snapshot']['sha256']},
                 'saved':self.runtime.path(DRAFT).exists(),'pending':self._pending_public(pending)}
@@ -284,12 +303,21 @@ class NetworkManager:
         if origin['server_ip'] not in [v.split('/')[0] for v in profile['observed']['addresses']]:
             raise RootActionError('Apply from an SSH session using the selected IPv4 interface.','NETWORK_SSH_REQUIRED')
         candidate=copy.deepcopy(profile['document']);node=candidate['network']['ethernets'][config['interface']]
+        if config['ipv6']=='disabled' and _static_ipv6(node):
+            raise RootActionError('Existing static IPv6 addresses, gateway or routes require explicit migration before disabling IPv6.','NETWORK_IPV6_POLICY')
+        if config['ipv6']!='preserve':
+            local=node.get('link-local',['ipv6'])
+            if not isinstance(local,list) or any(value not in ('ipv4','ipv6') for value in local):
+                raise RootActionError('An ordinary IPv4/IPv6 link-local list is required.','NETWORK_IPV6_POLICY')
+            node['dhcp6']=node['accept-ra']=config['ipv6']=='auto'
+            node['link-local']=(local+(['ipv6'] if 'ipv6' not in local else []) if config['ipv6']=='auto'
+                                else [value for value in local if value!='ipv6'])
         node['dhcp4']=config['mode']=='dhcp';node.pop('gateway4',None)
         addresses=[v for v in node.get('addresses',[]) if ':' in v]
         if config['mode']=='static':addresses.append(config['address'])
         if addresses:node['addresses']=addresses
         else:node.pop('addresses',None)
-        routes=[v for v in node.get('routes',[]) if ':' in str(v.get('via',''))]
+        routes=[v for v in node.get('routes',[]) if _ipv6_route(v)]
         if config['gateway']:routes.append({'to':'default','via':config['gateway']})
         if routes:node['routes']=routes
         else:node.pop('routes',None)
@@ -301,6 +329,13 @@ class NetworkManager:
         if config['mode']=='dhcp' and config['dns']:overrides['use-dns']=False
         if overrides:node['dhcp4-overrides']=overrides
         else:node.pop('dhcp4-overrides',None)
+        if config['ipv6']=='auto':
+            overrides6=node.get('dhcp6-overrides',{})
+            if not isinstance(overrides6,dict):raise RootActionError('An ordinary DHCPv6 override mapping is required.','NETWORK_IPV6_POLICY')
+            overrides6.pop('use-dns',None)
+            if config['dns']:overrides6['use-dns']=False
+            if overrides6:node['dhcp6-overrides']=overrides6
+            else:node.pop('dhcp6-overrides',None)
         if node['dhcp4'] and node.get('dhcp6') and node.get('dhcp4-overrides',{})!=node.get('dhcp6-overrides',{}):
             raise RootActionError('DHCPv4/v6 override symmetry would require changing IPv6; this combination is unsupported.','NETWORK_IPV6_POLICY')
         result={'schema':1,'module':'network','config':config,'source':{'path':profile['source']['path'],'sha256':profile['source']['snapshot']['sha256']},
@@ -309,7 +344,11 @@ class NetworkManager:
             'notes':['Only the same-name /run/netplan overlay changes during the 120-second trial.',
                      'Open a new physical SSH connection to the target IPv4 and confirm; an old SSH transport cannot confirm.',
                      'Only confirmation writes the original /etc/netplan source. A reboot before confirmation retains the original persistent source.',
-                     'Blank DHCP DNS inherits DHCP; manual entries replace DHCPv4 DNS. Existing IPv6 addressing and RA settings are preserved.']}
+                     'Blank DHCP DNS inherits DHCP; manual entries replace DHCPv4 DNS.',
+                     'IPv6 '+config['ipv6']+' affects only this Netplan interface; global sysctl configuration, loopback and other interfaces are unchanged.',
+                     {'auto':'Auto enables DHCPv6, Router Advertisements and IPv6 link-local; upstream global IPv6 or Internet connectivity is not guaranteed.',
+                      'disabled':'Disabled stops DHCPv6, RA and IPv6 link-local; existing static IPv6 prevents this operation.',
+                      'preserve':'Preserve keeps DHCPv6, RA, link-local and static IPv6 settings unchanged.'}[config['ipv6']]]}
         result['fingerprint']=guard.digest(guard.encoded(result));return result
 
     def plan(self,config):
@@ -369,7 +408,8 @@ class NetworkManager:
                 self.runtime.checked(['netplan','generate','--root-dir',str(self.runtime.path(validation))],timeout=30)
                 journal={'schema':1,'kind':'network','module':'network','transaction_id':identifier,'created_ns':time.time_ns(),
                     'status':'NETWORK_PREPARED','source':source,'inventory':fresh['before']['inventory'],
-                    'dependencies':fresh['before']['dependencies'],'config':fresh['config'],'before_config':fresh['before']['config'],
+                    'dependencies':fresh['before']['dependencies'],'backend_dependencies':fresh['before']['backend_dependencies'],
+                    'config':fresh['config'],'before_config':fresh['before']['config'],
                     'mac':fresh['before']['mac'],'overlay':'/run/netplan/'+Path(source['path']).name,'candidate_size':len(candidate),
                     'origin':fresh['origin'],'boot_id':self.runtime.boot_id(),'timeout_seconds':fresh['timeout_seconds'],
                     'file_hashes':{name:guard.digest(raw) for name,raw in artifacts.items()}}

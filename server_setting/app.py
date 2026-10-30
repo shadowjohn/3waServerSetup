@@ -383,13 +383,18 @@ class SettingApp(App):
                     with TabPane('Network', id='tab-network'):
                         with VerticalScroll():
                             yield Static('Reading Ethernet / Netplan status...', id='network-live', classes='module-state', markup=False)
-                            yield Static('Main Ethernet interface only. DHCP with blank DNS inherits DHCP DNS; manual DNS replaces it. Static IPv4 uses CIDR. Save keeps a private draft. Apply trials the configuration with an automatic rollback deadline; persistence requires a NEW SSH connection to the target IP. The current console cannot confirm it.', classes='hint', markup=False)
+                            yield Static('Main Ethernet interface only. DHCP with blank DNS inherits DHCP DNS; manual DNS replaces it. Static IPv4 uses CIDR. IPv6 Preserve keeps the current policy; Auto enables DHCPv6, RA and IPv6 link-local; Disable stops them on this NIC. Save keeps a private draft. Apply trials the configuration with an automatic rollback deadline; persistence requires a NEW SSH connection to the target IPv4. The current console cannot confirm it.', classes='hint', markup=False)
                             with Horizontal(classes='field'):
                                 yield Label('Ethernet interface')
                                 yield Select([], id='network-interface', disabled=not self.network_root)
                             with Horizontal(classes='field'):
                                 yield Label('IPv4 mode')
                                 yield Select([('DHCP', 'dhcp'), ('Static IPv4', 'static')], value='dhcp', allow_blank=False, id='network-mode', disabled=not self.network_root)
+                            with Horizontal(classes='field'):
+                                yield Label('IPv6 policy')
+                                yield Select([('Preserve current IPv6', 'preserve'), ('Enable IPv6 (automatic)', 'auto'),
+                                              ('Disable IPv6 on this NIC', 'disabled')], value='preserve', allow_blank=False,
+                                             id='network-ipv6', disabled=not self.network_root)
                             for identifier, label, placeholder in (
                                     ('address', 'Static IPv4 / CIDR', '192.168.137.24/24'),
                                     ('gateway', 'IPv4 gateway (optional)', '192.168.137.1'),
@@ -622,6 +627,7 @@ class SettingApp(App):
         if interface in self._network_interfaces:
             self.query_one('#network-interface', Select).value = interface
         self.query_one('#network-mode', Select).value = config.get('mode', 'dhcp')
+        self.query_one('#network-ipv6', Select).value = config.get('ipv6', 'preserve')
         self.query_one('#network-address', Input).value = config.get('address', '')
         self.query_one('#network-gateway', Input).value = config.get('gateway', '')
         dns = config.get('dns', [])
@@ -633,6 +639,7 @@ class SettingApp(App):
         interface = self.query_one('#network-interface', Select).value
         mode = self.query_one('#network-mode', Select).value
         return {'interface':interface if isinstance(interface, str) else '', 'mode':mode,
+                'ipv6':self.query_one('#network-ipv6', Select).value,
                 'address':self.query_one('#network-address', Input).value.strip() if mode == 'static' else '',
                 'gateway':self.query_one('#network-gateway', Input).value.strip() if mode == 'static' else '',
                 'dns':[self.query_one('#network-dns'+str(index), Input).value.strip() for index in range(1, 4)
@@ -671,7 +678,7 @@ class SettingApp(App):
         self.query_one('#network-status', Button).disabled = self.root_busy or self.network_manager is None
         ready = bool(self.network_root and self.network_manager is not None and self.network_state.get('supported'))
         editable = ready and not self.root_busy and not self._mutation_pending()
-        for identifier in ('interface', 'mode', 'dns1', 'dns2', 'dns3'):
+        for identifier in ('interface', 'mode', 'ipv6', 'dns1', 'dns2', 'dns3'):
             self.query_one('#network-'+identifier).disabled = not editable
         static = self.query_one('#network-mode', Select).value == 'static'
         for identifier in ('address', 'gateway'):

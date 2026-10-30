@@ -6,7 +6,7 @@ from pathlib import Path
 import platform
 import re
 
-DEVELOPMENT_VERSION = '2026.10.29.001-dev'
+DEVELOPMENT_VERSION = '2026.10.30.002-dev'
 RELEASE_TAG = re.compile(r'v([0-9]{4})\.([0-9]{2})\.([0-9]{2})\.([0-9]{3})(?:-rc\.[1-9][0-9]*)?')
 _SOURCE_ROOT = Path(__file__).resolve().parents[1]
 
@@ -124,7 +124,8 @@ def network_public(value):
               'dst', 'dev', 'source', 'path', 'sha256', 'saved', 'pending', 'transaction_id',
               'deadline_boottime', 'remaining_seconds', 'target_ip', 'timeout_seconds', 'confirmation_command',
               'notes', 'warnings', 'warning', 'operation', 'fingerprint', 'verification', 'persistent',
-              'cloud_init_action', 'action'}
+              'cloud_init_action', 'action', 'ipv6', 'ipv6_addresses', 'ipv6_routes', 'ipv6_disabled',
+              'ipv6_observed', 'ipv6_link_local_ready'}
     if isinstance(value, dict):
         return {key: network_public(item) for key, item in value.items() if key in fields}
     if isinstance(value, (list, tuple)):
